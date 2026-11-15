@@ -1,0 +1,5 @@
+Scroll stitching core from nasadunadu/screen-capture-macos
+https://github.com/nasadunadu/screen-capture-macos
+Commit: 25041713c78d651e85b47fca67ad72def8e44009
+Licensed under Apache License 2.0.
+Changes in Point Taken: namespace prefixes and exhaustive fallback when coarse row matching is unreliable; integration, retention and annotation mapping are separate.

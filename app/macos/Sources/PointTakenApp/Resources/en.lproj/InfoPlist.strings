@@ -1,0 +1,6 @@
+"CFBundleName" = "Point Taken";
+"CFBundleDisplayName" = "Point Taken";
+"NSLocalNetworkUsageDescription" = "Point Taken listens on your local network for your paired iPhone.";
+"NSMicrophoneUsageDescription" = "Point Taken records your voice while you narrate feedback.";
+"NSScreenCaptureUsageDescription" = "Point Taken records the screen area you select.";
+"NSSpeechRecognitionUsageDescription" = "Point Taken turns what you say while marking up pages into text.";

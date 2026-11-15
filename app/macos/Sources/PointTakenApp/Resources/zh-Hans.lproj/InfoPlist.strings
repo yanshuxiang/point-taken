@@ -1,0 +1,6 @@
+"CFBundleName" = "懂你意思";
+"CFBundleDisplayName" = "懂你意思";
+"NSLocalNetworkUsageDescription" = "懂你意思会在局域网内寻找你配对的 iPhone。";
+"NSMicrophoneUsageDescription" = "懂你意思在你边说边标时录下你的声音。";
+"NSScreenCaptureUsageDescription" = "懂你意思需要截取你选择的屏幕区域。";
+"NSSpeechRecognitionUsageDescription" = "懂你意思把你标注时说的话转成文字。";

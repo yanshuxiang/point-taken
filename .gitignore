@@ -1,0 +1,17 @@
+.point-taken/
+__pycache__/
+*.pyc
+.DS_Store
+.wrangler/
+/dist/
+promo/
+
+# Point Taken
+.build/
+.swiftpm/
+.pytest_cache/
+.claude/settings.local.json
+*.rdp
+
+# 宣传视频工作区（代码、素材、中间产物、成片都不进仓库）
+/video/

@@ -1,0 +1,976 @@
+// Adapted from nasadunadu/screen-capture-macos, commit 25041713c78d651e85b47fca67ad72def8e44009.
+// Apache-2.0; see ThirdParty/ScreenCaptureStitcher/LICENSE and NOTICE. Core algorithm only.
+import CoreGraphics
+import Foundation
+import Vision
+
+enum BoardStitchError: LocalizedError {
+    case mismatchedFrames
+    case insufficientOverlap(frame: Int)
+    case outputTooTall
+    case outputTooLarge
+    case renderingFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .mismatchedFrames: "长截图帧的尺寸不一致。"
+        case let .insufficientOverlap(frame): "第 \(frame) 帧与上一帧没有找到可靠的重叠区域。请减慢滚动后重试。"
+        case .outputTooTall: "长截图超过当前版本支持的最大高度。"
+        case .outputTooLarge: "长截图像素量过大，继续生成可能耗尽内存。请缩小选区宽度后重试。"
+        case .renderingFailed: "无法生成拼接后的长截图。"
+        }
+    }
+}
+
+struct BoardStitchAnalysis {
+    let overlaps: [Int]
+    let outputHeight: Int
+}
+
+struct BoardFrameAlignment {
+    enum Source {
+        case visionBands
+        case visionFullFrame
+        case pixelFallback
+    }
+
+    let overlap: Int
+    let scrollDelta: Int
+    let trailingTrim: Int
+    let confidence: Float
+    let source: Source
+}
+
+enum BoardScrollStitcher {
+    static let maximumOutputHeight = 100_000
+    // Rendering needs both the accepted strips and a final 4-byte-per-pixel
+    // canvas at the same time. Keep the expected pair below roughly 512 MiB.
+    static let maximumOutputPixels = 60_000_000
+
+    static func validateOutputSize(width: Int, height: Int) throws {
+        guard width > 0, height > 0 else { throw BoardStitchError.renderingFailed }
+        guard height <= maximumOutputHeight else { throw BoardStitchError.outputTooTall }
+        let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+        guard !overflow, pixels <= maximumOutputPixels else { throw BoardStitchError.outputTooLarge }
+    }
+
+    static func alignment(previous: CGImage, next: CGImage) -> BoardFrameAlignment? {
+        guard previous.width == next.width,
+              previous.height == next.height,
+              previous.width > 0,
+              previous.height > 0 else { return nil }
+
+        if BoardFrameSignature(previous).distance(to: BoardFrameSignature(next)) < 0.001 {
+            return BoardFrameAlignment(
+                overlap: previous.height,
+                scrollDelta: 0,
+                trailingTrim: 0,
+                confidence: 1,
+                source: .pixelFallback
+            )
+        }
+
+        let previousSample = BoardGrayFrame(previous)
+        let nextSample = BoardGrayFrame(next)
+        guard previousSample.detailScore >= 0.0005,
+              nextSample.detailScore >= 0.0005 else { return nil }
+        let stationary = stationaryEdgeInsets(previous: previousSample, next: nextSample)
+        let ordinaryMatch = bestOverlap(previous: previousSample, next: nextSample)
+        let minScrollRows = max(6, previousSample.height / 24)
+        let ordinaryPinnedNearZeroScroll = ordinaryMatch.rows >= previousSample.height - minScrollRows
+        let shouldCheckEdgeAware = ordinaryMatch.score >= 0.045
+            || ordinaryPinnedNearZeroScroll
+            || stationary.leading >= 4
+            || stationary.trailing >= 4
+
+        var selectedEdgeMatch: BoardEdgeAwareOverlap?
+        let match: (rows: Int, score: Double)
+        if shouldCheckEdgeAware,
+           let insetMatch = fixedEdgeAwareOverlapDetails(
+               previous: previousSample,
+               next: nextSample,
+               detectedLeading: stationary.leading,
+               detectedTrailing: stationary.trailing
+           ) {
+            let insetFoundRealScroll = insetMatch.rows <= previousSample.height - minScrollRows
+            let beatsOrdinaryScore = insetMatch.score + 0.006 < ordinaryMatch.score
+            let unpinsZeroScroll = ordinaryPinnedNearZeroScroll
+                && insetFoundRealScroll
+                && insetMatch.score < 0.16
+            let resolvesDetectedStationaryEdge = (stationary.leading >= 6 || stationary.trailing >= 6)
+                && insetFoundRealScroll
+                && insetMatch.score < min(0.16, ordinaryMatch.score + 0.015)
+            if beatsOrdinaryScore || unpinsZeroScroll || resolvesDetectedStationaryEdge {
+                selectedEdgeMatch = insetMatch
+                match = (insetMatch.rows, insetMatch.score)
+            } else {
+                match = ordinaryMatch
+            }
+        } else {
+            match = ordinaryMatch
+        }
+        let leadingSampleTrim = selectedEdgeMatch?.leadingInset ?? 0
+        let trailingSampleTrim = selectedEdgeMatch?.trailingInset ?? 0
+        if match.score < 0.16 {
+            let coarse = pixelAlignment(
+                match: match,
+                frameHeight: previous.height,
+                sampleHeight: nextSample.height,
+                trailingSampleTrim: trailingSampleTrim
+            )
+            return refineNativePixelAlignment(
+                coarse,
+                previous: previous,
+                next: next,
+                sampleHeight: nextSample.height,
+                leadingSampleTrim: leadingSampleTrim
+            )
+        }
+        if let vision = visionAlignment(previous: previous, next: next) {
+            let sampledOverlap = min(
+                nextSample.height,
+                max(1, Int(round(
+                    CGFloat(vision.overlap) * CGFloat(nextSample.height) / CGFloat(previous.height)
+                )))
+            )
+            let visionScore = overlapScore(
+                previous: previousSample,
+                next: nextSample,
+                overlap: sampledOverlap,
+                leadingInset: leadingSampleTrim,
+                trailingInset: trailingSampleTrim
+            )
+            if visionScore < 0.26 {
+                let aligned = applyingTrailingTrim(
+                    trailingSampleTrim,
+                    sampleHeight: nextSample.height,
+                    to: vision,
+                    frameHeight: previous.height
+                )
+                return refineNativePixelAlignment(
+                    aligned,
+                    previous: previous,
+                    next: next,
+                    sampleHeight: nextSample.height,
+                    leadingSampleTrim: leadingSampleTrim
+                )
+            }
+        }
+
+        guard match.score < 0.20 else { return nil }
+        let fallback = pixelAlignment(
+            match: match,
+            frameHeight: previous.height,
+            sampleHeight: nextSample.height,
+            trailingSampleTrim: trailingSampleTrim
+        )
+        return refineNativePixelAlignment(
+            fallback,
+            previous: previous,
+            next: next,
+            sampleHeight: nextSample.height,
+            leadingSampleTrim: leadingSampleTrim
+        )
+    }
+
+    private static func pixelAlignment(
+        match: (rows: Int, score: Double),
+        frameHeight: Int,
+        sampleHeight: Int,
+        trailingSampleTrim: Int
+    ) -> BoardFrameAlignment {
+        let pixelOverlap = min(
+            frameHeight,
+            max(0, Int(round(CGFloat(match.rows) * CGFloat(frameHeight) / CGFloat(sampleHeight))))
+        )
+        return BoardFrameAlignment(
+            overlap: pixelOverlap,
+            scrollDelta: frameHeight - pixelOverlap,
+            trailingTrim: scaledTrim(
+                trailingSampleTrim,
+                sampleHeight: sampleHeight,
+                frameHeight: frameHeight
+            ),
+            confidence: Float(max(0, 1 - match.score)),
+            source: .pixelFallback
+        )
+    }
+
+    private static func applyingTrailingTrim(
+        _ sampleTrim: Int,
+        sampleHeight: Int,
+        to alignment: BoardFrameAlignment,
+        frameHeight: Int
+    ) -> BoardFrameAlignment {
+        BoardFrameAlignment(
+            overlap: alignment.overlap,
+            scrollDelta: alignment.scrollDelta,
+            trailingTrim: scaledTrim(
+                sampleTrim,
+                sampleHeight: sampleHeight,
+                frameHeight: frameHeight
+            ),
+            confidence: alignment.confidence,
+            source: alignment.source
+        )
+    }
+
+    private static func scaledTrim(
+        _ sampleTrim: Int,
+        sampleHeight: Int,
+        frameHeight: Int
+    ) -> Int {
+        guard sampleTrim > 0, sampleHeight > 0 else { return 0 }
+        return min(
+            frameHeight / 3,
+            max(0, Int((CGFloat(sampleTrim) * CGFloat(frameHeight) / CGFloat(sampleHeight)).rounded()))
+        )
+    }
+
+    static func analyze(_ frames: [CGImage]) throws -> BoardStitchAnalysis {
+        guard let first = frames.first else { return BoardStitchAnalysis(overlaps: [], outputHeight: 0) }
+        guard frames.allSatisfy({ $0.width == first.width && $0.height == first.height }) else {
+            throw BoardStitchError.mismatchedFrames
+        }
+        try validateOutputSize(width: first.width, height: first.height)
+        guard frames.count > 1 else {
+            return BoardStitchAnalysis(overlaps: [], outputHeight: first.height)
+        }
+
+        var overlaps: [Int] = []
+        var outputHeight = first.height
+        for index in 1..<frames.count {
+            guard let match = alignment(previous: frames[index - 1], next: frames[index]) else {
+                throw BoardStitchError.insufficientOverlap(frame: index + 1)
+            }
+            overlaps.append(match.overlap)
+            outputHeight += match.scrollDelta
+            try validateOutputSize(width: first.width, height: outputHeight)
+        }
+        return BoardStitchAnalysis(overlaps: overlaps, outputHeight: outputHeight)
+    }
+
+    static func stitch(_ frames: [CGImage]) throws -> CGImage {
+        let analysis = try analyze(frames)
+        return try stitch(frames, overlaps: analysis.overlaps)
+    }
+
+    static func stitch(_ frames: [CGImage], overlaps: [Int]) throws -> CGImage {
+        guard let first = frames.first else { throw BoardStitchError.renderingFailed }
+        guard frames.allSatisfy({ $0.width == first.width && $0.height == first.height }),
+              overlaps.count == max(0, frames.count - 1) else {
+            throw BoardStitchError.mismatchedFrames
+        }
+
+        var segments = [first]
+        for index in 1..<frames.count {
+            let overlap = overlaps[index - 1]
+            guard overlap >= 0, overlap <= frames[index].height else { throw BoardStitchError.renderingFailed }
+            if overlap < frames[index].height {
+                segments.append(try newContentSegment(from: frames[index], overlap: overlap))
+            }
+        }
+        return try render(segments: segments)
+    }
+
+    static func newContentSegment(
+        from frame: CGImage,
+        overlap: Int,
+        trailingTrim: Int = 0
+    ) throws -> CGImage {
+        let segmentHeight = frame.height - overlap
+        let startY = overlap - trailingTrim
+        guard overlap >= 0,
+              overlap < frame.height,
+              trailingTrim >= 0,
+              startY >= 0,
+              startY + segmentHeight <= frame.height,
+              segmentHeight > 0,
+              let cropped = frame.cropping(to: CGRect(
+                  x: 0,
+                  y: startY,
+                  width: frame.width,
+                  height: segmentHeight
+              )),
+              let copied = copiedImage(cropped) else {
+            throw BoardStitchError.renderingFailed
+        }
+        return copied
+    }
+
+    static func render(segments: [CGImage]) throws -> CGImage {
+        guard let first = segments.first,
+              segments.allSatisfy({ $0.width == first.width }) else {
+            throw BoardStitchError.mismatchedFrames
+        }
+
+        let outputHeight = try segments.reduce(0) { height, segment in
+            let nextHeight = height + segment.height
+            try validateOutputSize(width: first.width, height: nextHeight)
+            return nextHeight
+        }
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: first.width,
+            height: outputHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw BoardStitchError.renderingFailed }
+
+        var consumedHeight = 0
+        for segment in segments {
+            context.draw(
+                segment,
+                in: CGRect(
+                    x: 0,
+                    y: outputHeight - consumedHeight - segment.height,
+                    width: segment.width,
+                    height: segment.height
+                )
+            )
+            consumedHeight += segment.height
+        }
+        guard let output = context.makeImage() else { throw BoardStitchError.renderingFailed }
+        return output
+    }
+
+    private static func visionAlignment(previous: CGImage, next: CGImage) -> BoardFrameAlignment? {
+        let maximumAnalysisWidth = 900
+        let analysisWidth = min(maximumAnalysisWidth, previous.width)
+        let scale = CGFloat(analysisWidth) / CGFloat(previous.width)
+        let analysisHeight = max(1, Int((CGFloat(previous.height) * scale).rounded()))
+        guard let previousAnalysis = resized(previous, width: analysisWidth, height: analysisHeight),
+              let nextAnalysis = resized(next, width: analysisWidth, height: analysisHeight) else { return nil }
+
+        let translations = comparisonBands(width: analysisWidth, height: analysisHeight).compactMap { rect -> BoardVisionTranslation? in
+            guard let previousBand = previousAnalysis.cropping(to: rect),
+                  let nextBand = nextAnalysis.cropping(to: rect),
+                  let translation = translation(current: nextBand, targetedTo: previousBand),
+                  isPlausible(translation, frameHeight: CGFloat(analysisHeight)) else { return nil }
+            return translation
+        }
+
+        if translations.count >= 4,
+           let group = bestAgreement(in: translations, minimumCount: 4),
+           let average = average(group) {
+            return frameAlignment(
+                translation: average,
+                source: .visionBands,
+                frameHeight: previous.height,
+                analysisScale: scale
+            )
+        }
+
+        guard let fullFrame = translation(current: nextAnalysis, targetedTo: previousAnalysis),
+              fullFrame.confidence >= 0.90,
+              isPlausible(fullFrame, frameHeight: CGFloat(analysisHeight)) else { return nil }
+        return frameAlignment(
+            translation: fullFrame,
+            source: .visionFullFrame,
+            frameHeight: previous.height,
+            analysisScale: scale
+        )
+    }
+
+    private static func frameAlignment(
+        translation: BoardVisionTranslation,
+        source: BoardFrameAlignment.Source,
+        frameHeight: Int,
+        analysisScale: CGFloat
+    ) -> BoardFrameAlignment? {
+        guard analysisScale > 0 else { return nil }
+        let delta = Int((translation.y / analysisScale).rounded())
+        guard delta <= Int(CGFloat(frameHeight) * 0.94) else { return nil }
+        return BoardFrameAlignment(
+            overlap: max(0, frameHeight - delta),
+            scrollDelta: delta,
+            trailingTrim: 0,
+            confidence: translation.confidence,
+            source: source
+        )
+    }
+
+    private static func comparisonBands(width: Int, height: Int) -> [CGRect] {
+        let count = 5
+        let bandHeight = min(height, max(80, height / 3))
+        let maximumY = max(0, height - bandHeight)
+        guard maximumY > 0 else {
+            return [CGRect(x: 0, y: 0, width: width, height: bandHeight)]
+        }
+        return (0..<count).map { index in
+            let y = Int((CGFloat(maximumY) * CGFloat(index) / CGFloat(count - 1)).rounded())
+            return CGRect(x: 0, y: y, width: width, height: bandHeight)
+        }
+    }
+
+    private static func translation(current: CGImage, targetedTo previous: CGImage) -> BoardVisionTranslation? {
+        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: previous)
+        let handler = VNImageRequestHandler(cgImage: current, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+        guard let observation = request.results?.first as? VNImageTranslationAlignmentObservation else { return nil }
+        return BoardVisionTranslation(
+            x: observation.alignmentTransform.tx,
+            y: observation.alignmentTransform.ty,
+            confidence: observation.confidence
+        )
+    }
+
+    private static func isPlausible(_ translation: BoardVisionTranslation, frameHeight: CGFloat) -> Bool {
+        abs(translation.x) <= 4
+            && translation.y >= 0
+            && translation.y <= frameHeight * 0.94
+            && translation.confidence >= 0.30
+    }
+
+    private static func bestAgreement(
+        in translations: [BoardVisionTranslation],
+        minimumCount: Int
+    ) -> [BoardVisionTranslation]? {
+        guard minimumCount > 0 else { return nil }
+        let tolerance: CGFloat = 4
+        let best = translations.reduce(into: [BoardVisionTranslation]()) { currentBest, candidate in
+            let group = translations.filter { abs($0.y - candidate.y) <= tolerance }
+            if group.count > currentBest.count { currentBest = group }
+        }
+        return best.count >= minimumCount ? best : nil
+    }
+
+    private static func average(_ translations: [BoardVisionTranslation]) -> BoardVisionTranslation? {
+        guard !translations.isEmpty else { return nil }
+        let count = CGFloat(translations.count)
+        return BoardVisionTranslation(
+            x: translations.reduce(0) { $0 + $1.x } / count,
+            y: translations.reduce(0) { $0 + $1.y } / count,
+            confidence: translations.reduce(0) { $0 + $1.confidence } / Float(translations.count)
+        )
+    }
+
+    private static func resized(_ image: CGImage, width: Int, height: Int) -> CGImage? {
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
+    private static func copiedImage(_ image: CGImage) -> CGImage? {
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage()
+    }
+
+    private static func bestOverlap(previous: BoardGrayFrame, next: BoardGrayFrame) -> (rows: Int, score: Double) {
+        if previous.width == next.width,
+           previous.height == next.height,
+           previous.bytes == next.bytes {
+            return (previous.height, 0)
+        }
+
+        let height = min(previous.height, next.height)
+        let minOverlap = max(12, height / 16)
+        let maxOverlap = max(minOverlap, height - 6)
+        var bestRows = minOverlap
+        var bestScore = Double.greatestFiniteMagnitude
+
+        // A coarse scan followed by an exact local refinement preserves the
+        // selected row while avoiding hundreds of expensive full comparisons.
+        let coarseStep = max(1, height / 120)
+        var overlap = minOverlap
+        while overlap <= maxOverlap {
+            let raw = overlapScore(previous: previous, next: next, overlap: overlap)
+            let preferenceForLargerOverlap = Double(height - overlap) / Double(height) * 0.003
+            let score = raw + preferenceForLargerOverlap
+            if score < bestScore {
+                bestScore = score
+                bestRows = overlap
+            }
+            overlap += coarseStep
+        }
+        if (maxOverlap - minOverlap).isMultiple(of: coarseStep) == false {
+            let raw = overlapScore(previous: previous, next: next, overlap: maxOverlap)
+            let score = raw + Double(height - maxOverlap) / Double(height) * 0.003
+            if score < bestScore {
+                bestScore = score
+                bestRows = maxOverlap
+            }
+        }
+
+        let refinement = max(minOverlap, bestRows - coarseStep)...min(maxOverlap, bestRows + coarseStep)
+        for overlap in refinement {
+            let raw = overlapScore(previous: previous, next: next, overlap: overlap)
+            let preferenceForLargerOverlap = Double(height - overlap) / Double(height) * 0.003
+            let score = raw + preferenceForLargerOverlap
+            if score < bestScore {
+                bestScore = score
+                bestRows = overlap
+            }
+        }
+        // Point Taken: pixel-sharp content can have no useful match at adjacent coarse rows.
+        // Scan omitted rows only when the coarse candidate is unreliable; never guess a displacement.
+        if bestScore > 0.045 {
+            for overlap in minOverlap...maxOverlap {
+                let raw = overlapScore(previous: previous, next: next, overlap: overlap)
+                let score = raw + Double(height - overlap) / Double(height) * 0.003
+                if score < bestScore { bestScore = score; bestRows = overlap }
+            }
+        }
+        return (bestRows, bestScore)
+    }
+
+    static func fixedEdgeAwareOverlap(
+        previous: BoardGrayFrame,
+        next: BoardGrayFrame
+    ) -> (rows: Int, score: Double)? {
+        let stationary = stationaryEdgeInsets(previous: previous, next: next)
+        guard let match = fixedEdgeAwareOverlapDetails(
+            previous: previous,
+            next: next,
+            detectedLeading: stationary.leading,
+            detectedTrailing: stationary.trailing
+        ) else {
+            return nil
+        }
+        return (match.rows, match.score)
+    }
+
+    private static func stationaryEdgeInsets(
+        previous: BoardGrayFrame,
+        next: BoardGrayFrame
+    ) -> (leading: Int, trailing: Int) {
+        let width = min(previous.width, next.width)
+        let height = min(previous.height, next.height)
+        guard width > 4, height >= 48 else { return (0, 0) }
+
+        var rowDiff = [Double](repeating: 0, count: height)
+        var rowStructure = [Double](repeating: 0, count: height)
+        let span = Double(max(1, width - 1) * 255)
+
+        for y in 0..<height {
+            let prevY = max(0, y - 1)
+            let nextRowY = min(height - 1, y + 1)
+            var diffSum = 0
+            var structureSum = 0
+            for x in 1..<width {
+                let a = Int(previous[x, y])
+                let b = Int(next[x, y])
+                diffSum += abs(a - b)
+                let hEdgeA = abs(a - Int(previous[x - 1, y]))
+                let hEdgeB = abs(b - Int(next[x - 1, y]))
+                let vEdgeA = max(abs(a - Int(previous[x, prevY])), abs(a - Int(previous[x, nextRowY])))
+                let vEdgeB = max(abs(b - Int(next[x, prevY])), abs(b - Int(next[x, nextRowY])))
+                structureSum += max(max(hEdgeA, hEdgeB), max(vEdgeA, vEdgeB))
+            }
+            rowDiff[y] = Double(diffSum) / span
+            rowStructure[y] = Double(structureSum) / span
+        }
+
+        let midStart = height / 4
+        let midEnd = max(midStart + 1, height * 3 / 4)
+        var movingCenterDiff = 0.0
+        var movingCenterCount = 0
+        for y in midStart..<midEnd where rowStructure[y] >= 0.006 || rowDiff[y] >= 0.015 {
+            movingCenterDiff += rowDiff[y]
+            movingCenterCount += 1
+        }
+        guard movingCenterCount > 0,
+              movingCenterDiff / Double(movingCenterCount) >= 0.010 else {
+            return (0, 0)
+        }
+
+        let maxEdgeRows = height / 3
+
+        var rawLeading = 0
+        var leadingToleranceBudget = 2
+        for y in 0..<maxEdgeRows {
+            if rowDiff[y] <= 0.014 {
+                rawLeading = y + 1
+            } else if rowDiff[y] <= 0.032, leadingToleranceBudget > 0 {
+                leadingToleranceBudget -= 1
+                rawLeading = y + 1
+            } else {
+                break
+            }
+        }
+        while rawLeading > 0, rowStructure[rawLeading - 1] < 0.008 {
+            rawLeading -= 1
+        }
+        let leadingStructuredRows = (0..<rawLeading).filter { rowStructure[$0] >= 0.008 }.count
+        let leading = (rawLeading >= 6 && leadingStructuredRows >= max(2, rawLeading / 10))
+            ? rawLeading
+            : 0
+
+        var rawTrailing = 0
+        var trailingToleranceBudget = 2
+        for offset in 0..<maxEdgeRows {
+            let y = height - 1 - offset
+            if rowDiff[y] <= 0.014 {
+                rawTrailing = offset + 1
+            } else if rowDiff[y] <= 0.032, trailingToleranceBudget > 0 {
+                trailingToleranceBudget -= 1
+                rawTrailing = offset + 1
+            } else {
+                break
+            }
+        }
+        while rawTrailing > 0, rowStructure[height - rawTrailing] < 0.008 {
+            rawTrailing -= 1
+        }
+        let trailingStart = height - rawTrailing
+        let trailingStructuredRows = (trailingStart..<height).filter { rowStructure[$0] >= 0.008 }.count
+        let trailing = (rawTrailing >= 6 && trailingStructuredRows >= max(2, rawTrailing / 10))
+            ? rawTrailing
+            : 0
+
+        return (leading, trailing)
+    }
+
+    private static func fixedEdgeAwareOverlapDetails(
+        previous: BoardGrayFrame,
+        next: BoardGrayFrame,
+        detectedLeading: Int = 0,
+        detectedTrailing: Int = 0
+    ) -> BoardEdgeAwareOverlap? {
+        let height = min(previous.height, next.height)
+        let minOverlap = max(12, height / 16)
+        let maxOverlap = max(minOverlap, height - 6)
+        let minimumComparedRows = max(24, height / 12)
+        let maximumInset = min(height / 3, max(0, maxOverlap - minimumComparedRows))
+        guard maximumInset >= 4 else { return nil }
+
+        let overlapStep = max(1, height / 96)
+        let insetStep = max(2, height / 24)
+        let oneSidedInsets = stride(
+            from: insetStep,
+            through: maximumInset,
+            by: insetStep
+        )
+        let clampedLeading = min(maximumInset, max(0, detectedLeading))
+        let clampedTrailing = min(maximumInset, max(0, detectedTrailing))
+
+        var profiles: [(leading: Int, trailing: Int)] = []
+        if clampedLeading >= 4, clampedTrailing >= 4,
+           clampedLeading + clampedTrailing <= maxOverlap - minimumComparedRows {
+            profiles.append((leading: clampedLeading, trailing: clampedTrailing))
+        } else if clampedTrailing >= 4 {
+            profiles.append((leading: 0, trailing: clampedTrailing))
+            for leading in oneSidedInsets where leading + clampedTrailing <= maxOverlap - minimumComparedRows {
+                profiles.append((leading: leading, trailing: clampedTrailing))
+            }
+        } else if clampedLeading >= 4 {
+            profiles.append((leading: clampedLeading, trailing: 0))
+            for leading in oneSidedInsets where abs(leading - clampedLeading) >= insetStep {
+                profiles.append((leading: leading, trailing: 0))
+            }
+        } else {
+            profiles.append(contentsOf: oneSidedInsets.map { (leading: $0, trailing: 0) })
+        }
+
+        func profilePenalty(_ profile: (leading: Int, trailing: Int)) -> Double {
+            let unverifiedLeading = max(0, profile.leading - clampedLeading)
+            let unverifiedTrailing = max(0, profile.trailing - clampedTrailing)
+            let verifiedInset = profile.leading + profile.trailing - unverifiedLeading - unverifiedTrailing
+            let uncoveredStationary = max(0, clampedLeading - profile.leading)
+                + max(0, clampedTrailing - profile.trailing)
+            return Double(unverifiedLeading + unverifiedTrailing) / Double(height) * 0.008
+                + Double(verifiedInset) / Double(height) * 0.0015
+                + Double(uncoveredStationary) / Double(height) * 0.006
+        }
+
+        var bestRows = minOverlap
+        var bestProfile = (leading: 0, trailing: 0)
+        var bestScore = Double.greatestFiniteMagnitude
+
+        for (profileIndex, profile) in profiles.enumerated() {
+            let totalInset = profile.leading + profile.trailing
+            let firstOverlap = max(minOverlap, totalInset + minimumComparedRows)
+            let insetPenalty = profilePenalty(profile)
+            let step = (profileIndex == 0 && (clampedLeading >= 4 || clampedTrailing >= 4))
+                ? 1
+                : overlapStep
+            var overlap = firstOverlap
+            while overlap <= maxOverlap {
+                let raw = overlapScore(
+                    previous: previous,
+                    next: next,
+                    overlap: overlap,
+                    leadingInset: profile.leading,
+                    trailingInset: profile.trailing
+                )
+                let scrollPreference = Double(height - overlap) / Double(height) * 0.003
+                let score = raw + scrollPreference + insetPenalty
+                if score < bestScore {
+                    bestScore = score
+                    bestRows = overlap
+                    bestProfile = profile
+                }
+                overlap += step
+            }
+        }
+
+        guard bestScore.isFinite else { return nil }
+        let bestTotalInset = bestProfile.leading + bestProfile.trailing
+        let bestInsetPenalty = profilePenalty(bestProfile)
+        let refinedOverlaps = max(
+            max(minOverlap, bestTotalInset + minimumComparedRows),
+            bestRows - overlapStep
+        )...min(maxOverlap, bestRows + overlapStep)
+        for candidateOverlap in refinedOverlaps {
+            let raw = overlapScore(
+                previous: previous,
+                next: next,
+                overlap: candidateOverlap,
+                leadingInset: bestProfile.leading,
+                trailingInset: bestProfile.trailing
+            )
+            let scrollPreference = Double(height - candidateOverlap) / Double(height) * 0.003
+            let score = raw + scrollPreference + bestInsetPenalty
+            if score < bestScore {
+                bestScore = score
+                bestRows = candidateOverlap
+            }
+        }
+        return BoardEdgeAwareOverlap(
+            rows: bestRows,
+            score: bestScore,
+            leadingInset: bestProfile.leading,
+            trailingInset: bestProfile.trailing
+        )
+    }
+
+    private static func refineNativePixelAlignment(
+        _ alignment: BoardFrameAlignment,
+        previous: CGImage,
+        next: CGImage,
+        sampleHeight: Int,
+        leadingSampleTrim: Int
+    ) -> BoardFrameAlignment {
+        let frameHeight = min(previous.height, next.height)
+        guard frameHeight > sampleHeight,
+              sampleHeight > 0,
+              alignment.overlap > 0,
+              alignment.overlap < frameHeight else {
+            return alignment
+        }
+
+        let scale = Double(frameHeight) / Double(sampleHeight)
+        let searchRadius = max(3, Int(ceil(scale)) + 2)
+        let stripWidth = min(72, min(previous.width, next.width))
+        guard stripWidth > 4 else { return alignment }
+
+        let previousStrip = BoardGrayFrame(previous, targetWidth: stripWidth, targetHeight: frameHeight)
+        let nextStrip = BoardGrayFrame(next, targetWidth: stripWidth, targetHeight: frameHeight)
+        let leadingNativeInset = scaledTrim(
+            leadingSampleTrim,
+            sampleHeight: sampleHeight,
+            frameHeight: frameHeight
+        )
+        let trailingNativeInset = alignment.trailingTrim
+        let minOverlap = max(12, leadingNativeInset + trailingNativeInset + 16)
+        let maxOverlap = frameHeight - 1
+        guard minOverlap <= maxOverlap else { return alignment }
+
+        let lower = max(minOverlap, alignment.overlap - searchRadius)
+        let upper = min(maxOverlap, alignment.overlap + searchRadius)
+        guard lower <= upper else { return alignment }
+
+        var bestOverlap = alignment.overlap
+        var bestScore = Double.greatestFiniteMagnitude
+        for candidateOverlap in lower...upper {
+            let raw = overlapScore(
+                previous: previousStrip,
+                next: nextStrip,
+                overlap: candidateOverlap,
+                leadingInset: leadingNativeInset,
+                trailingInset: trailingNativeInset
+            )
+            let distancePenalty = Double(abs(candidateOverlap - alignment.overlap)) * 0.00015
+            let score = raw + distancePenalty
+            if score < bestScore {
+                bestScore = score
+                bestOverlap = candidateOverlap
+            }
+        }
+
+        guard bestScore < 0.22 else { return alignment }
+        return BoardFrameAlignment(
+            overlap: bestOverlap,
+            scrollDelta: frameHeight - bestOverlap,
+            trailingTrim: alignment.trailingTrim,
+            confidence: alignment.confidence,
+            source: alignment.source
+        )
+    }
+
+    private static func overlapScore(
+        previous: BoardGrayFrame,
+        next: BoardGrayFrame,
+        overlap: Int,
+        leadingInset: Int = 0,
+        trailingInset: Int = 0
+    ) -> Double {
+        let width = min(previous.width, next.width)
+        guard overlap > 0,
+              overlap <= min(previous.height, next.height),
+              leadingInset >= 0,
+              trailingInset >= 0,
+              leadingInset + trailingInset < overlap,
+              width > 2 else { return .greatestFiniteMagnitude }
+
+        let comparedRows = overlap - leadingInset - trailingInset
+        let comparisonEnd = overlap - trailingInset
+        let yStep = max(1, comparedRows / 64)
+        var pixelDifference = 0.0
+        var edgeDifference = 0.0
+        var edgeEnergy = 0.0
+        var pixelCount = 0
+        var y = leadingInset
+        while y < comparisonEnd {
+            let previousY = previous.height - overlap + y
+            let nextY = y
+            var x = 1
+            while x < width - 1 {
+                let a = Int(previous[x, previousY])
+                let b = Int(next[x, nextY])
+                pixelDifference += Double(abs(a - b)) / 255.0
+
+                let horizontalA = abs(a - Int(previous[x - 1, previousY]))
+                let horizontalB = abs(b - Int(next[x - 1, nextY]))
+                edgeDifference += Double(abs(horizontalA - horizontalB))
+                edgeEnergy += Double(max(horizontalA, horizontalB))
+                if y > leadingInset {
+                    let verticalA = abs(a - Int(previous[x, previousY - min(yStep, previousY)]))
+                    let verticalB = abs(b - Int(next[x, nextY - min(yStep, nextY)]))
+                    edgeDifference += Double(abs(verticalA - verticalB))
+                    edgeEnergy += Double(max(verticalA, verticalB))
+                }
+                pixelCount += 1
+                x += 2
+            }
+            y += yStep
+        }
+        guard pixelCount > 0, edgeEnergy > 0 else { return .greatestFiniteMagnitude }
+        let luminanceScore = pixelDifference / Double(pixelCount)
+        let structureScore = min(1, edgeDifference / edgeEnergy)
+        return luminanceScore * 0.25 + structureScore * 0.75
+    }
+}
+
+private struct BoardEdgeAwareOverlap {
+    let rows: Int
+    let score: Double
+    let leadingInset: Int
+    let trailingInset: Int
+}
+
+private struct BoardVisionTranslation {
+    let x: CGFloat
+    let y: CGFloat
+    let confidence: Float
+}
+
+struct BoardFrameSignature {
+    private let values: [UInt8]
+
+    init(_ image: CGImage) {
+        let width = 16
+        let height = 16
+        var data = [UInt8](repeating: 0, count: width * height)
+        let space = CGColorSpaceCreateDeviceGray()
+        data.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(
+                data: bytes.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return }
+            context.interpolationQuality = .low
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        values = data
+    }
+
+    func distance(to other: BoardFrameSignature) -> Double {
+        guard values.count == other.values.count, !values.isEmpty else { return 1 }
+        let total = zip(values, other.values).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        return Double(total) / Double(values.count * 255)
+    }
+}
+
+struct BoardGrayFrame {
+    let width: Int
+    let height: Int
+    let bytes: [UInt8]
+
+    init(width: Int, height: Int, bytes: [UInt8]) {
+        precondition(width > 0 && height > 0 && bytes.count == width * height)
+        self.width = width
+        self.height = height
+        self.bytes = bytes
+    }
+
+    init(_ image: CGImage, targetWidth: Int? = nil, targetHeight: Int? = nil) {
+        let resolvedWidth = min(targetWidth ?? 84, image.width)
+        let resolvedHeight = min(targetHeight ?? 520, image.height)
+        var storage = [UInt8](repeating: 0, count: resolvedWidth * resolvedHeight)
+        storage.withUnsafeMutableBytes { raw in
+            guard let context = CGContext(
+                data: raw.baseAddress,
+                width: resolvedWidth,
+                height: resolvedHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: resolvedWidth,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: resolvedWidth, height: resolvedHeight))
+        }
+        width = resolvedWidth
+        height = resolvedHeight
+        bytes = storage
+    }
+
+    subscript(x: Int, y: Int) -> UInt8 { bytes[y * width + x] }
+
+    var detailScore: Double {
+        guard width > 1, height > 1 else { return 0 }
+        var total = 0
+        var count = 0
+        for y in 1..<height {
+            for x in 1..<width {
+                total += abs(Int(self[x, y]) - Int(self[x - 1, y]))
+                total += abs(Int(self[x, y]) - Int(self[x, y - 1]))
+                count += 2
+            }
+        }
+        guard count > 0 else { return 0 }
+        return Double(total) / Double(count * 255)
+    }
+}
