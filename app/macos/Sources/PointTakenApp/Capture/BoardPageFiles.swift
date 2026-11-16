@@ -17,6 +17,12 @@ func boardThumbnail(_ url: URL, height: CGFloat = 96) -> CGImage? {
 
 enum BoardPageFiles {
     static func encode(_ page: BoardSession.Page) -> [String: Any] {
+        var row = fields(page)
+        if let capturedAt = page.capturedAt { row["capturedAt"] = capturedAt }
+        if page.keepApart { row["keepApart"] = true }
+        return row
+    }
+    private static func fields(_ page: BoardSession.Page) -> [String: Any] {
         ["images": page.images.map(\.lastPathComponent), "original": page.original?.lastPathComponent ?? "",
          "marks": page.marks, "text": page.text, "included": page.included, "scene": page.scene,
          "lineWidth": page.lineWidth, "footerTrim": page.footerTrim,
@@ -52,7 +58,9 @@ enum BoardPageFiles {
                                  contextIDs: row["contextIDs"] as? [String] ?? [],
                                  markEvidence: (try? JSONSerialization.data(withJSONObject: row["markEvidence"] ?? [])).flatMap { try? JSONDecoder().decode([BoardMarkEvidence].self, from: $0) } ?? [],
                                  manuallySaved: row["manuallySaved"] as? Bool ?? false,
-                                 imageNeedsRepair: row["imageNeedsRepair"] as? Bool ?? false)
+                                 imageNeedsRepair: row["imageNeedsRepair"] as? Bool ?? false,
+                                 capturedAt: row["capturedAt"] as? Double,
+                                 keepApart: row["keepApart"] as? Bool ?? false)
     }
     static func split(_ page: BoardSession.Page) throws -> [BoardSession.Page] {
         guard !page.components.isEmpty, page.components.count == page.componentOffsets.count,

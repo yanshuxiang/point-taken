@@ -4,6 +4,7 @@ import CoreGraphics
 /// A small visual fingerprint used only for detecting page boundaries; never used as exported image data.
 public struct BoardFrameFingerprint {
     public let values: [UInt8]
+    public init(values: [UInt8]) { self.values = values }
     public init(_ image: CGImage) {
         let width = 64, height = 40
         var bytes = [UInt8](repeating: 0, count: width * height)
@@ -37,10 +38,13 @@ public struct BoardPageGate {
         if scroll { lastScroll = time }
     }
 
-    public mutating func observe(_ next: BoardFrameFingerprint, context nextContext: String, at time: Double) -> Decision {
+    /// `mask`: what moves on its own on this page (BoardMotionMask) is left out of the comparison, so a turning
+    /// carousel near a click or a scroll does not look like navigation.
+    public mutating func observe(_ next: BoardFrameFingerprint, context nextContext: String, at time: Double,
+                                 mask: BoardMotionMask = BoardMotionMask()) -> Decision {
         defer { previous = next; context = nextContext }
         guard let previous, let context else { return .reference }
-        let difference = next.distance(to: previous)
+        let difference = mask.distance(next, previous)
         if context != nextContext {
             settling = true; stableSince = nil
             return .leave

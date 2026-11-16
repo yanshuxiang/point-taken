@@ -47,6 +47,10 @@ final class BoardSession {
         var markEvidence: [BoardMarkEvidence] = []
         var manuallySaved = false
         var imageNeedsRepair = false
+        /// session seconds when the screen picture was taken (a long picture: its last part); nil in older records
+        var capturedAt: Double? = nil
+        /// the user split this long picture in the review: never join its parts automatically again
+        var keepApart = false
         var allFiles: Set<URL> { Set(images + [original].compactMap { $0 } + sourceFrames + retainedFiles + components.flatMap { Array($0.allFiles) }) }
     }
 
@@ -292,6 +296,11 @@ final class BoardSession {
             self.timeline?.observe(frame, boundary: boundary, at: self.moment)
             if boundary { self.writeNotes() }
         }
+        screenFeed.onInput = { [weak self] kind, dy, at in
+            guard let self, self.active, !self.paused, let timeline = self.timeline else { return }
+            if timeline.evidence.inputs == nil { timeline.evidence.inputs = [] }
+            BoardScrollInput.append(BoardInput(kind: kind, at: self.clock.elapsed(at: at), dy: dy), to: &timeline.evidence.inputs!)
+        }
         screenFeed.onTransition = { [weak self] old, next, scrolling in self?.transition(old, next, scrolling: scrolling) ?? false }
         screenFeed.onLeave = { [weak self] frame in
             guard let self else { return }
@@ -450,12 +459,36 @@ final class BoardSession {
         defer { strokeStart = nil; strokeFrame = nil; if !holdKeys.holding { selectTool(nil) } }
         guard active, !paused, let frame = strokeFrame ?? screenFeed.current, frame.bounds == panel.displayBounds,
               let stroke = panel.ink.normalizedStrokes.last else { return }
-        let sameViewport = liveScroll.map { $0.frame.bounds == frame.bounds && $0.frame.fingerprint.distance(to: frame.fingerprint) < 0.002 } ?? true
-        timeline?.observe(frame, boundary: !sameViewport, at: moment)
-        timeline?.anchor(frame)
         let evidence = BoardMarkEvidence(number: nextMarkNumber, start: strokeStart ?? moment, end: moment)
         nextMarkNumber += 1
-        if let liveScroll, sameViewport, liveScroll.offset == 0, let index = livePage, pages.indices.contains(index) {
+        place(stroke, evidence: evidence, frame: frame, panel: panel)
+    }
+
+    /// Whether two pictures show the same page: what moves on its own there (a carousel, a video) is left out.
+    private func samePicture(_ a: BoardFrameFingerprint, _ b: BoardFrameFingerprint, within limit: Double = 0.002) -> Bool {
+        screenFeed.motion.distance(a, b) < limit
+    }
+
+    /// Files a stroke just drawn on `frame`: onto the page being marked when the screen still shows it, else as a
+    /// new page. A stroke on a part that moves by itself (a carousel's cover) must sit on the picture it was drawn
+    /// on: when that part has changed since the page was taken, the page takes the current picture — unless an
+    /// earlier mark is on the moving part too (it was about what was shown then), in which case this is a new page.
+    func place(_ stroke: [[Double]], evidence: BoardMarkEvidence, frame: BoardScreenFeed.Frame, panel: BoardInkPanel?) {
+        let motion = screenFeed.motion
+        let sameViewport = liveScroll.map { $0.frame.bounds == frame.bounds && samePicture($0.frame.fingerprint, frame.fingerprint) } ?? true
+        var onChangedMovingPart = false
+        if let liveScroll, sameViewport, motion.touches(stroke),
+           motion.movingDistance(liveScroll.frame.fingerprint, frame.fingerprint) > 0.01 {
+            onChangedMovingPart = true
+        }
+        var startsNewPage = !sameViewport
+        if onChangedMovingPart, let liveScroll {
+            let earlier = liveScroll.offset == 0 ? liveScroll.viewportMarks.contains { motion.touches($0) } : true
+            startsNewPage = earlier || !refreshPicture(liveScroll, to: frame)
+        }
+        timeline?.observe(frame, boundary: startsNewPage, at: moment)
+        timeline?.anchor(frame)
+        if !startsNewPage, let liveScroll, liveScroll.offset == 0, let index = livePage, pages.indices.contains(index) {
             do { try liveScroll.add(stroke, evidence: evidence); pages[index] = liveScroll.page; writeNotes() }
             catch { capsule.toast("标记保存失败：" + error.localizedDescription) }
         } else {
@@ -463,7 +496,7 @@ final class BoardSession {
             // when the user draws here. Never append unmarked content to a long screenshot.
             var marks: [[[Double]]] = []
             var metadata: [BoardMarkEvidence] = []
-            if let liveScroll, sameViewport {
+            if let liveScroll, sameViewport, !onChangedMovingPart {
                 for (points, item) in zip(liveScroll.viewportMarks, liveScroll.page.markEvidence) {
                     if points.contains(where: { $0.count == 2 && $0[1] >= 0 && $0[1] <= 1 }) {
                         marks.append(points); metadata.append(item)
@@ -472,15 +505,26 @@ final class BoardSession {
             }
             marks.append(stroke); metadata.append(evidence)
             let index = save(frame.image, bounds: frame.bounds, marks: marks, text: "", included: true,
-                             scene: frame.scene, evidence: metadata)
+                             scene: frame.scene, evidence: metadata, capturedAt: clock.elapsed(at: frame.capturedAt),
+                             fresh: onChangedMovingPart)
             if let index {
                 sealScroll()
                 liveScroll = BoardLiveScroll(page: pages[index], frame: frame); livePage = index
-                panel.ink.load(pages[index].marks)
+                panel?.ink.load(pages[index].marks)
             }
         }
         wordsAtScreen = speech.fullText.count; pagesAtScreen = pages.count
         capsule.setTray(pages.compactMap(\.thumb))
+    }
+
+    /// The page being marked takes `frame` as its picture (its marks are redrawn on it). Only for a plain page
+    /// still at its first viewport; false when that is not possible.
+    private func refreshPicture(_ live: BoardLiveScroll, to frame: BoardScreenFeed.Frame) -> Bool {
+        guard let index = livePage, pages.indices.contains(index), live.offset == 0,
+              let original = live.page.original, (try? live.replacePicture(with: frame)) == true else { return false }
+        originalPrints[original] = (frame.fingerprint, frame.image.width, frame.image.height)
+        pages[index] = live.page
+        return true
     }
 
     private func sealScroll() {
@@ -495,8 +539,9 @@ final class BoardSession {
     private func transition(_ old: BoardScreenFeed.Frame, _ next: BoardScreenFeed.Frame, scrolling: Bool) -> Bool {
         guard active, !busy, !paused, let liveScroll, let index = livePage, pages.indices.contains(index) else { return false }
         guard !panels.contains(where: { $0.ink.drawing }) else { return true }
+        // a carousel or a video turning over is the page moving by itself, not navigation
         if old.scene == next.scene, old.title == next.title, !scrolling,
-           old.fingerprint.distance(to: next.fingerprint) < 0.045 { return false }
+           samePicture(old.fingerprint, next.fingerprint, within: 0.045) { return false }
         if old.scene == next.scene, old.title == next.title, scrolling {
             guard !aligning else { pendingScrollFrame = next; return true }
             if liveScroll.frame.fingerprint.distance(to: next.fingerprint) < 0.001 { return true }
@@ -540,6 +585,7 @@ final class BoardSession {
             return true
         }
         // Navigation or unreliable registration never leaves stale ink blocking the new content.
+        screenFeed.motion.reset()
         sealScroll(); selectTool(nil)
         timeline?.observe(next, boundary: true, at: moment)
         writeNotes()
@@ -556,7 +602,8 @@ final class BoardSession {
         let evidence = marks.map { _ -> BoardMarkEvidence in
             defer { nextMarkNumber += 1 }; return BoardMarkEvidence(number: nextMarkNumber)
         }
-        if save(frame.image, bounds: frame.bounds, marks: marks, text: "", included: true, scene: frame.scene, evidence: evidence) != nil {
+        if save(frame.image, bounds: frame.bounds, marks: marks, text: "", included: true, scene: frame.scene, evidence: evidence,
+                capturedAt: clock.elapsed(at: frame.capturedAt)) != nil {
             panel.ink.clear(); selectTool(nil); refresh()
         }
     }
@@ -566,7 +613,7 @@ final class BoardSession {
     private func keepPage(always: Bool, finishing: Bool = false, then: @escaping (Bool) -> Void) {
         panels.filter { $0.ink.drawing }.forEach { $0.ink.end() }
         if let liveScroll, let index = livePage, pages.indices.contains(index), liveScroll.offset == 0,
-           screenFeed.current.map({ $0.bounds == liveScroll.frame.bounds && $0.fingerprint.distance(to: liveScroll.frame.fingerprint) < 0.002 }) ?? true {
+           screenFeed.current.map({ $0.bounds == liveScroll.frame.bounds && samePicture($0.fingerprint, liveScroll.frame.fingerprint) }) ?? true {
             if always { pages[index].manuallySaved = true }
             sealScroll(); screenFeed.resetBoundary(); then(true); return
         }
@@ -581,7 +628,7 @@ final class BoardSession {
         let marks = liveScroll?.viewportMarks ?? []
         let evidence = liveScroll?.page.markEvidence ?? []
         let kept = save(frame.image, bounds: frame.bounds, marks: marks, text: "", included: true,
-                        scene: frame.scene, evidence: evidence, manual: true) != nil
+                        scene: frame.scene, evidence: evidence, manual: true, capturedAt: clock.elapsed(at: frame.capturedAt)) != nil
         if kept { sealScroll(); screenFeed.resetBoundary() }
         then(kept)
     }
@@ -597,16 +644,20 @@ final class BoardSession {
     }
 
     @discardableResult private func save(_ image: CGImage, bounds: CGRect, marks: [[[Double]]], text: String,
-                                         included: Bool, scene: String, evidence: [BoardMarkEvidence] = [], manual: Bool = false) -> Int? {
+                                         included: Bool, scene: String, evidence: [BoardMarkEvidence] = [], manual: Bool = false,
+                                         capturedAt: Double? = nil, fresh: Bool = false) -> Int? {
         guard let dir, !marks.isEmpty || manual else { return nil }
         let contextIDs = timeline?.currentID.map { [$0] } ?? []
         let imagePrint = BoardFrameFingerprint(image)
-        // Revisit a confidently matched unchanged viewport: update one image, keep all visits.
-        if let index = pages.indices.first(where: { index in
+        // Revisit a confidently matched unchanged viewport: update one image, keep all visits. What moves on its own
+        // there is left out — but marks on a moving part that has changed since need the picture they were drawn on.
+        let motion = screenFeed.motion
+        if !fresh, let index = pages.indices.first(where: { index in
             let page = pages[index]
             guard !contextIDs.isEmpty, page.contextIDs == contextIDs, page.scene == scene,
                   let url = page.original, let old = originalPrint(url), old.width == image.width, old.height == image.height else { return false }
-            return old.print.distance(to: imagePrint) < 0.002
+            guard motion.distance(old.print, imagePrint) < 0.002 else { return false }
+            return !(marks.contains(where: motion.touches) && motion.movingDistance(old.print, imagePrint) > 0.01)
         }), let output = pages[index].images.first {
             var page = pages[index]
             let known = Set(page.markEvidence.map(\.number))
@@ -633,7 +684,8 @@ final class BoardSession {
         originalPrints[original] = (imagePrint, image.width, image.height)
         let page = Page(images: [output], text: text, thumb: thumb,
                           original: original, marks: marks, included: included, scene: scene,
-                          lineWidth: width, sourceFrames: [original], contextIDs: contextIDs, markEvidence: evidence, manuallySaved: manual)
+                          lineWidth: width, sourceFrames: [original], contextIDs: contextIDs, markEvidence: evidence, manuallySaved: manual,
+                          capturedAt: capturedAt)
         BoardFileWriter.marked(image, page: page, to: output)
         pages.append(page)
         capsule.setTray(pages.compactMap(\.thumb))
@@ -721,11 +773,12 @@ final class BoardSession {
     /// review), so the words said there have their picture. A screen marked on already has its page.
     private func keepSpoken(_ frame: BoardScreenFeed.Frame, wordCount: Int) {
         defer { wordsAtScreen = wordCount; pagesAtScreen = pages.count }
-        let unsavedViewport = liveScroll.map { $0.offset != 0 || $0.frame.bounds != frame.bounds || $0.frame.fingerprint.distance(to: frame.fingerprint) >= 0.002 } ?? true
+        let unsavedViewport = liveScroll.map { $0.offset != 0 || $0.frame.bounds != frame.bounds || !samePicture($0.frame.fingerprint, frame.fingerprint) } ?? true
         guard active, !paused, !busy, unsavedViewport, pages.count == pagesAtScreen,
               wordCount - wordsAtScreen >= 4 else { return }
         timeline?.observe(frame, boundary: liveScroll != nil, at: moment)
-        save(frame.image, bounds: frame.bounds, marks: [], text: "", included: false, scene: frame.scene, manual: true)
+        save(frame.image, bounds: frame.bounds, marks: [], text: "", included: false, scene: frame.scene, manual: true,
+             capturedAt: clock.elapsed(at: frame.capturedAt))
     }
 
     private func writeEvidence() {
@@ -3531,6 +3584,61 @@ extension BoardSession {
             && !session.pages.last!.included && session.pages.last!.marks.isEmpty
         checks["spoken_viewport_has_its_own_context"] = session.pages.last!.contextIDs != session.pages[0].contextIDs
         BoardFileWriter.flush()
+        // A page with a carousel of covers: the cover turning over is the page moving by itself, not a new page.
+        do {
+            let carouselDir = directory.appendingPathComponent("carousel")
+            try? FileManager.default.createDirectory(at: carouselDir, withIntermediateDirectories: true)
+            let base = BoardPreview.sampleScreen(CGSize(width: 640, height: 400), hue: 0.58)
+            func cover(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> BoardScreenFeed.Frame {
+                let ctx = CGContext(data: nil, width: 640, height: 400, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                ctx.draw(base, in: bounds)
+                ctx.setFillColor(CGColor(red: red, green: green, blue: blue, alpha: 1))
+                ctx.fill(CGRect(x: 400, y: 200, width: 160, height: 120))      // top-left y 80–200
+                return BoardScreenFeed.Frame(image: ctx.makeImage()!, displayID: 1, bounds: bounds, scene: "browser:feed",
+                                             appName: "浏览器", title: "首页")
+            }
+            let red = cover(0.9, 0.1, 0.1), blue = cover(0.1, 0.2, 0.9), green = cover(0.1, 0.8, 0.2)
+            func mark(_ n: Int) -> BoardMarkEvidence { BoardMarkEvidence(number: n, start: .init(elapsed: Double(n)), end: .init(elapsed: Double(n) + 0.5)) }
+            let elsewhere: [[Double]] = [[0.1, 0.7], [0.3, 0.7], [0.3, 0.85], [0.1, 0.85], [0.1, 0.7]]
+            let onCover: [[Double]] = [[0.6, 0.18], [0.9, 0.18], [0.9, 0.52], [0.6, 0.52], [0.6, 0.18]]
+            func fresh() -> BoardSession {
+                let s = BoardSession(); s.dir = carouselDir; s.active = true; s.timeline = BoardTimeline(); return s
+            }
+            // without knowing what moves, a turned cover splits the page (the reported problem)
+            let before = fresh()
+            before.place(elsewhere, evidence: mark(1), frame: red, panel: nil)
+            before.place(elsewhere, evidence: mark(2), frame: blue, panel: nil)
+            checks["carousel_without_mask_used_to_split"] = before.pages.count == 2
+            // with the carousel learned (it turned while the user did nothing)
+            let s = fresh()
+            s.screenFeed.motion.learn(from: red.fingerprint, to: blue.fingerprint)
+            s.place(elsewhere, evidence: mark(1), frame: red, panel: nil)
+            s.place(elsewhere, evidence: mark(2), frame: blue, panel: nil)
+            checks["carousel_turn_keeps_same_page"] = s.pages.count == 1 && s.pages[0].markEvidence.map(\.number) == [1, 2]
+            checks["carousel_turn_is_not_navigation"] = s.transition(red, blue, scrolling: false) == false
+            // a mark on the cover: the page takes the picture it was drawn on
+            s.place(onCover, evidence: mark(3), frame: green, panel: nil)
+            BoardFileWriter.flush()
+            let shown = s.pages[0].original.flatMap(loadCGImage).map(BoardFrameFingerprint.init)
+            checks["mark_on_turned_cover_refreshes_picture"] = s.pages.count == 1 && s.pages[0].marks.count == 3
+                && shown.map { $0.distance(to: green.fingerprint) < 0.001 } == true
+            // another mark on the cover after it turned again: the first was about the cover shown then
+            s.place(onCover, evidence: mark(4), frame: red, panel: nil)
+            checks["second_cover_mark_starts_new_page"] = s.pages.count == 2 && s.pages[1].markEvidence.map(\.number) == [4]
+            // a real change of page is still one
+            let flipped = CGContext(data: nil, width: 640, height: 400, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            flipped.translateBy(x: 640, y: 400); flipped.scaleBy(x: -1, y: -1)     // another layout: everything moved
+            flipped.draw(base, in: bounds)
+            let other = BoardScreenFeed.Frame(image: flipped.makeImage()!, displayID: 1, bounds: bounds, scene: red.scene,
+                                              appName: red.appName, title: red.title)
+            checks["carousel_mask_still_sees_navigation"] = s.transition(red, other, scrolling: false) == true
+                && s.screenFeed.motion.isEmpty
+            s.place(elsewhere, evidence: mark(5), frame: other, panel: nil)
+            checks["changed_page_still_new_page"] = s.pages.count == 3
+            BoardFileWriter.flush()
+        }
         // Exercise the actual coalescing writer under backlog, not just the enqueue API.
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         BoardFileWriter.enqueue(directory.appendingPathComponent("writer-gate")) {

@@ -290,7 +290,7 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
     /// The record's timeline. It can arrive after the window opened (the whole recording is still being transcribed
     /// when recording stops), so everything worked out from it — the timeline, and what was said about each mark —
     /// is redone when it does.
-    var evidence: BoardEvidence? { didSet { rebuildTimeline(); marksChanged() } }
+    var evidence: BoardEvidence? { didSet { rebuildTimeline(); marksChanged(); startAutoMerge() } }
     /// the timeline after a sentence was edited here (the session saves it with the record)
     var onEvidence: ((BoardEvidence) -> Void)?
     /// the recording (原始录音.wav), when it is kept: each sentence can be played
@@ -381,6 +381,11 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
     private var finalizing = false
     private var selected: Int?
     private var closing = false
+    /// the automatic long pictures were looked for (once per window, after recording, with the record's inputs)
+    private var autoMergeStarted = false
+    /// pictures this window wrote (long pictures, split parts): the ones no page uses are removed when it closes
+    private var madeFiles: Set<URL> = []
+    private let splitItem = NSMenuItem(title: "拆开长图", action: nil, keyEquivalent: "")
 
     // Layout (Apple HIG: a sidebar split view; the window's commands in its toolbar, the primary one — Copy — on
     // the trailing edge; nothing important along the bottom edge). Sidebar: the pages. Detail: the page (header,
@@ -530,8 +535,11 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
         image.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
         folder.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
         restore.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: nil)
-        for item in [copyOnly, image, folder, restore] { item.target = self }
-        more.items = recording ? [image] : [copyOnly, image, folder, .separator(), restore]
+        splitItem.action = #selector(splitLongImage)
+        splitItem.image = NSImage(systemSymbolName: "rectangle.split.1x2", accessibilityDescription: nil)
+        splitItem.isEnabled = false
+        for item in [copyOnly, image, folder, restore, splitItem] { item.target = self }
+        more.items = recording ? [image] : [copyOnly, image, splitItem, folder, .separator(), restore]
         deliveryItems = [copyOnly, folder, restore]
 
         // the one primary action, on the trailing edge: 复制并关闭 (or 完成 while recording); Return presses it
@@ -1241,6 +1249,7 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
     }
 
     func show() {
+        startAutoMerge()
         window.center()
         if recording { window.orderFrontRegardless() }
         else { BoardHome.prepareForDisplay(); presentWindow(window) }
@@ -1315,6 +1324,7 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
     private func showPage(_ index: Int?) {
         notePopover.close()
         selected = index
+        splitItem.isEnabled = !recording && index.map { pages.indices.contains($0) && !pages[$0].components.isEmpty } == true
         defer { updateSwitcher() }
         focus(page: index)
         markCanvas.selected = nil
@@ -1568,6 +1578,8 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
         return alert.runModal() == .alertFirstButtonReturn
     }
     func windowWillClose(_ notification: Notification) {
+        let used = pages.reduce(into: Set<URL>()) { $0.formUnion($1.allFiles) }
+        madeFiles.subtracting(used).forEach { try? FileManager.default.removeItem(at: $0) }
         player?.stop(); playStop?.invalidate()
         undo.removeAllActions()
         onClose?()
@@ -1614,6 +1626,53 @@ final class BoardReviewWindow: NSObject, NSWindowDelegate, NSTableViewDataSource
             pages.remove(at: s)
             selected = pages.isEmpty ? nil : min(s, pages.count - 1)
         }
+    }
+
+    // MARK: long pictures
+
+    /// After recording, pages the record proves are one document scrolled down become one long picture
+    /// (BoardAutoMerge). It runs once, off the main thread, and lands as one undoable step — and only if the pages are
+    /// still exactly as they were when it started.
+    private func startAutoMerge() {
+        guard !recording, !autoMergeStarted, pages.count > 1, let inputs = evidence?.inputs, !inputs.isEmpty else { return }
+        autoMergeStarted = true
+        let before = pages
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = BoardAutoMerge.run(before, inputs: inputs)
+            DispatchQueue.main.async {
+                guard let self, !self.closing, !result.joined.isEmpty,
+                      self.pages.map(\.images) == before.map(\.images), self.pages.map(\.marks) == before.map(\.marks) else {
+                    result.made.forEach { try? FileManager.default.removeItem(at: $0) }
+                    return
+                }
+                self.applyAutoMerge(result)
+            }
+        }
+    }
+    private func applyAutoMerge(_ result: BoardAutoMerge.Result) {
+        madeFiles.formUnion(result.made)
+        let first = result.origin.firstIndex { $0.count > 1 }
+        change("合成长图", structural: true) {
+            pages = result.pages
+            selected = first ?? selected.map { min($0, pages.count - 1) }
+        }
+        let names = result.joined.map { group in group.count == 2 ? "第 \(group[0])、\(group[1]) 页" : "第 \(group[0])–\(group.last!) 页" }
+        note.stringValue = names.joined(separator: "，") + " 是同一页面往下滚动，已合成长图；不要的话按 ⌘Z 撤销，或在「…」里拆开"
+        note.textColor = .secondaryLabelColor
+    }
+    /// The shown long picture back into the screen pictures it was made from; they are never joined automatically again.
+    @objc private func splitLongImage() {
+        guard let s = selected, pages.indices.contains(s), !pages[s].components.isEmpty else { return }
+        let parts: [BoardSession.Page]
+        do { parts = try BoardPageFiles.split(pages[s]).map { var part = $0; part.keepApart = true; return part } }
+        catch { note.stringValue = "拆开失败：" + error.localizedDescription; note.textColor = .systemOrange; return }
+        madeFiles.formUnion(parts.flatMap(\.images))
+        change("拆开长图", structural: true) {
+            pages.replaceSubrange(s...s, with: parts)
+            selected = s
+        }
+        note.stringValue = "已拆开成 \(parts.count) 页"
+        note.textColor = .secondaryLabelColor
     }
 
     // MARK: the marks list
@@ -2005,6 +2064,82 @@ extension BoardReviewWindow {
             do { _ = try BoardLongImage.merge(input[0], overlapInk); checks["long_image_never_discards_overlap_ink"] = false }
             catch { checks["long_image_never_discards_overlap_ink"] = true }
         } catch { checks["long_image_adapter"] = false }
+        // Automatic long pictures: two screens of one document under pinned bars (a toolbar, a Dock), the second
+        // scrolled 150 px down. Only a proven downward scroll joins them; everything weaker keeps them apart.
+        do {
+            let w = 480, h = 600, bar = 40, dock = 30
+            func document(_ seed: UInt64) -> CGImage {
+                let ctx = CGContext(data: nil, width: w, height: 2000, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                var noise = seed
+                for y in 0..<2000 { for x in stride(from: 0, to: w, by: 8) {
+                    noise = noise &* 6364136223846793005 &+ 1
+                    ctx.setFillColor(CGColor(gray: CGFloat(noise >> 56) / 255, alpha: 1))
+                    ctx.fill(CGRect(x: x, y: y, width: 8, height: 1))
+                } }
+                return ctx.makeImage()!
+            }
+            func screen(_ doc: CGImage, at offset: Int) -> CGImage {
+                let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                ctx.draw(doc.cropping(to: CGRect(x: 0, y: offset, width: w, height: h - bar - dock))!,
+                         in: CGRect(x: 0, y: dock, width: w, height: h - bar - dock))
+                ctx.setFillColor(CGColor(gray: 0.3, alpha: 1)); ctx.fill(CGRect(x: 0, y: h - bar, width: w, height: bar))
+                ctx.setFillColor(CGColor(gray: 0.15, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: w, height: dock))
+                return ctx.makeImage()!
+            }
+            func page(_ image: CGImage, _ name: String, at time: Double, marks: [([Double], Int)]) -> BoardSession.Page {
+                let url = directory.appendingPathComponent("scroll-\(name).png")
+                _ = writePNG(image, to: url)
+                return BoardSession.Page(images: [url], text: "", thumb: nil, original: url, marks: marks.map { [$0.0] },
+                                         scene: "safari-window", sourceFrames: [url],
+                                         markEvidence: marks.map { BoardMarkEvidence(number: $0.1) }, capturedAt: time)
+            }
+            let doc = document(11)
+            let top = page(screen(doc, at: 0), "top", at: 10, marks: [([0.3, 0.3], 1)])
+            // the second page carries mark 1 (still on screen after the scroll, now on the toolbar) and adds mark 2,
+            // drawn on content both screens show
+            let lower = page(screen(doc, at: 150), "lower", at: 14, marks: [([0.3, 0.05], 1), ([0.6, 0.5], 2)])
+            let scrolled = [BoardInput(kind: .scroll, at: 12, dy: -150)]
+            let joined = BoardAutoMerge.run([top, lower], inputs: scrolled)
+            let long = joined.pages.first
+            checks["auto_long_image_joins_proven_scroll"] = joined.pages.count == 1 && joined.joined == [[1, 2]]
+                && long.flatMap { $0.original.flatMap(loadCGImage)?.height } == h - dock + 150
+            checks["auto_long_image_keeps_marks_on_their_content"] = long.map {
+                $0.markEvidence.map(\.number) == [1, 2] && $0.marks.count == 2
+                    && abs($0.marks[0][0][1] - 180.0 / 720) < 0.002 && abs($0.marks[1][0][1] - 450.0 / 720) < 0.002
+            } ?? false
+            checks["auto_long_image_splits_back"] = long.map { (try? BoardPageFiles.split($0))?.count == 2 } ?? false
+            func stays(_ a: BoardSession.Page, _ b: BoardSession.Page, _ inputs: [BoardInput]) -> Bool {
+                BoardAutoMerge.run([a, b], inputs: inputs).pages.count == 2
+            }
+            checks["auto_long_image_needs_scroll_input"] = stays(top, lower, [])
+                && stays(top, lower, [BoardInput(kind: .scroll, at: 20, dy: -150)])
+            checks["auto_long_image_refuses_click_or_key_between"] = stays(top, lower, scrolled + [BoardInput(kind: .click, at: 13)])
+                && stays(top, lower, scrolled + [BoardInput(kind: .key, at: 11)])
+            checks["auto_long_image_refuses_upward_scroll"] = stays(top, lower, [BoardInput(kind: .scroll, at: 12, dy: 150)])
+            var apart = lower; apart.keepApart = true
+            var otherWindow = lower; otherWindow.scene = "another-window"
+            checks["auto_long_image_respects_split_and_window"] = stays(top, apart, scrolled) && stays(top, otherWindow, scrolled)
+            checks["auto_long_image_refuses_unproven_pixels"] = stays(top, page(screen(document(99), at: 150), "other", at: 14, marks: []), scrolled)
+                && stays(top, page(screen(doc, at: 0), "same", at: 14, marks: []), scrolled)
+            checks["auto_long_image_refuses_ink_on_pinned_bar"] = stays(top, page(screen(doc, at: 150), "bar", at: 14, marks: [([0.5, 0.03], 3)]), scrolled)
+            // in the window: it happens by itself after opening, ⌘Z takes it back, and a split stays split
+            let window = BoardReviewWindow(pages: [top, lower], transcript: "", recording: false)
+            window.lowerPaneStore = nil
+            var record = BoardEvidence(); record.inputs = scrolled
+            window.evidence = record
+            let deadline = Date().addingTimeInterval(15)
+            while window.pages.count != 1, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+            checks["review_joins_scrolled_pages_by_itself"] = window.pages.count == 1 && window.note.stringValue.contains("合成长图")
+            window.undo.undo()
+            checks["review_long_image_undo"] = window.pages.count == 2
+            window.undo.redo()
+            window.splitLongImage()
+            checks["review_split_long_image_stays_apart"] = window.pages.count == 2 && window.pages.allSatisfy(\.keepApart)
+                && BoardAutoMerge.run(window.pages, inputs: scrolled).pages.count == 2
+            window.closing = true; window.window.close()
+        }
         // Synthetic UI rendering for visual QA, never the user's desktop.
         // three pages, each with its time on screen, and the sentences said: the timeline groups them by page
         var shown: [BoardSession.Page] = []

@@ -40,6 +40,23 @@ final class BoardLiveScroll {
         if let evidence { page.markEvidence.append(evidence) }
         do { try redraw(image) } catch { page = previous; throw error }
     }
+    /// The page takes `next` as its picture, the marks redrawn on it: a part of the page that moves by itself (a
+    /// carousel) changed, and a mark is about to be drawn on what is shown now. Only a plain page at its first
+    /// viewport, with a picture of the same size; false otherwise (nothing changed then).
+    func replacePicture(with next: BoardScreenFeed.Frame) throws -> Bool {
+        guard offset == 0, furthest == 0, page.components.isEmpty, let url = page.original,
+              next.scene == frame.scene, next.image.width == frame.image.width, next.image.height == frame.image.height else { return false }
+        let previous = (page, frame, cached)
+        BoardFileWriter.png(next.image, to: url)
+        cached = (url, next.image)
+        frame = next
+        do { try redraw(next.image) } catch {
+            (page, frame, cached) = previous
+            if let image = previous.2?.image { BoardFileWriter.png(image, to: url) }
+            throw error
+        }
+        return true
+    }
     func undo() throws -> Bool {
         guard !page.marks.isEmpty, let image = original() else { return false }
         let previous = page

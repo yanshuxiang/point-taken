@@ -49,6 +49,9 @@ public struct BoardEvidence: Codable {
     public var visits: [BoardVisit] = []
     public var speech: [BoardSpeechSegment] = []
     public var speechTimingSource = "unavailable"
+    /// scrolls, clicks and key presses that went to other apps (no keys, no positions): the review joins two pages
+    /// into a long picture only when nothing but scrolling down happened between them. nil in older records.
+    public var inputs: [BoardInput]?
     public init() {}
     public static let filename = "时间线.json"
 

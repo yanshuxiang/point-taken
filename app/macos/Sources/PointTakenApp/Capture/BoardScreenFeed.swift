@@ -16,17 +16,31 @@ final class BoardScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
         /// the picture's small signature, made once (on the capture queue for live frames): comparing frames never
         /// rescales a full screenshot on the main thread, where the pen's mouse events are handled
         let fingerprint: BoardFrameFingerprint
+        /// system uptime when the picture arrived (compared with the times of the inputs around it)
+        let capturedAt: Double
         init(image: CGImage, displayID: CGDirectDisplayID, bounds: CGRect, scene: String, appName: String = "", title: String = "",
-             fingerprint: BoardFrameFingerprint? = nil) {
+             fingerprint: BoardFrameFingerprint? = nil, capturedAt: Double = ProcessInfo.processInfo.systemUptime) {
             self.image = image; self.displayID = displayID; self.bounds = bounds; self.scene = scene
             self.appName = appName; self.title = title
             self.fingerprint = fingerprint ?? BoardFrameFingerprint(image)
+            self.capturedAt = capturedAt
         }
     }
     var onObserve: ((Frame, Bool) -> Void)?
+    /// an input that went to another app: its kind, how far a scroll moved the content (points, negative reveals
+    /// what is below), and the system uptime. Never which key or where.
+    var onInput: ((BoardInput.Kind, Double?, Double) -> Void)?
     var onLeave: ((Frame) -> Void)?
     var onTransition: ((Frame, Frame, Bool) -> Bool)?
     private var lastScroll = -Double.infinity
+    /// the last click or key press that went to another app
+    private var lastPress = -Double.infinity
+    /// what moves on its own on the page in front (BoardMotionMask): learned only from frames that changed while the
+    /// user did nothing, forgotten when the window or the page changes or the content scrolls
+    var motion = BoardMotionMask()
+    /// The page can only be changing by itself: no click or key for a while (a page may still be loading from one),
+    /// and no scrolling (momentum included, which arrives as wheel events).
+    private func quiet(at now: Double) -> Bool { now - lastPress > 3.0 && now - lastScroll > 0.8 }
     var onFailure: ((String) -> Void)?
     var paused = false { didSet { lock.lock(); capturePaused = paused; lock.unlock() } }
     private var capturePaused = false
@@ -48,15 +62,46 @@ final class BoardScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
         let id = UUID(); token = id
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel, .leftMouseUp, .rightMouseUp, .keyDown]) { [weak self] event in
             guard let self, !self.paused else { return }
-            if event.type == .scrollWheel { self.lastScroll = ProcessInfo.processInfo.systemUptime }
-            else { Self.cachedContext = nil }
+            let now = ProcessInfo.processInfo.systemUptime
+            if event.type == .scrollWheel {
+                self.lastScroll = now
+                self.motion.reset()                 // the moving parts are somewhere else on screen now
+                // a mouse wheel reports lines, a trackpad points; only the direction is relied on
+                let dy = Double(event.scrollingDeltaY) * (event.hasPreciseScrollingDeltas ? 1 : 10)
+                if dy != 0 { self.onInput?(.scroll, dy, now) }
+            } else {
+                Self.cachedContext = nil
+                self.lastPress = now
+                self.onInput?(event.type == .keyDown ? .key : .click, nil, now)
+            }
             self.gate.interaction(at: ProcessInfo.processInfo.systemUptime, scroll: event.type == .scrollWheel)
         }
-        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { [weak self] content, error in
+        openStreams(id: id, attempt: 0)
+    }
+
+    /// Our own windows (the capsule, the ink stage, the screen border) must never reach the originals: they change
+    /// all the time, so a captured capsule makes every stroke look like a new viewport and splits one page into many.
+    /// The app has to be in the shareable list for the filter to exclude it. With `onScreenWindowsOnly: true` the list
+    /// only counts normal-level windows, so when no window of ours at that level is open (no review window, say),
+    /// this process is missing and nothing is excluded. Ask for every window instead, and never start capturing
+    /// without excluding ourselves.
+    private func openStreams(id: UUID, attempt: Int) {
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { [weak self] content, error in
             DispatchQueue.main.async {
                 guard let self, self.token == id else { return }
                 guard let content else { self.onFailure?(error?.localizedDescription ?? "无法读取屏幕"); return }
                 let own = content.applications.filter { $0.processID == getpid() }
+                guard !own.isEmpty else {
+                    if attempt < 5 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                            guard let self, self.token == id else { return }
+                            self.openStreams(id: id, attempt: attempt + 1)
+                        }
+                    } else {
+                        self.onFailure?("无法把本应用的窗口排除出截图")
+                    }
+                    return
+                }
                 for display in content.displays {
                     let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
                     let configuration = SCStreamConfiguration()
@@ -87,7 +132,7 @@ final class BoardScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
         if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil
         streams.forEach { $0.stopCapture { _ in } }; streams = []
         lock.lock(); metadata = [:]; delivering = []; lock.unlock()
-        current = nil; reference = nil; gate = BoardPageGate()
+        current = nil; reference = nil; gate = BoardPageGate(); motion.reset()
     }
 
     func resetBoundary() { reference = current; gate = BoardPageGate() }
@@ -123,15 +168,21 @@ final class BoardScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
             guard !self.paused else { return }
             let old = self.current
             self.current = frame
+            if let old {
+                if old.scene != frame.scene || old.title != frame.title { self.motion.reset() }
+                else if self.quiet(at: frame.capturedAt) { self.motion.learn(from: old.fingerprint, to: frame.fingerprint) }
+            }
             if let old, self.onTransition?(old, frame, ProcessInfo.processInfo.systemUptime - self.lastScroll < 1.2) == true {
                 self.reference = frame; self.gate = BoardPageGate(); return
             }
-            let decision = self.gate.observe(frame.fingerprint, context: scene + "|" + frame.title, at: ProcessInfo.processInfo.systemUptime)
+            let decision = self.gate.observe(frame.fingerprint, context: scene + "|" + frame.title,
+                                             at: ProcessInfo.processInfo.systemUptime, mask: self.motion)
             switch decision {
             case .reference:
                 self.onObserve?(frame, false)
                 self.reference = frame
             case .leave:
+                self.motion.reset()
                 if let old = self.reference { self.onLeave?(old) }
                 self.onObserve?(frame, true)
                 self.reference = frame
