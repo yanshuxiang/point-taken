@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="200" viewBox="0 0 1200 200">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f6f8fa"/>
+      <stop offset="1" stop-color="#e9fbf1"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="1196" height="196" rx="20" fill="url(#g)" stroke="#13c26b" stroke-width="3" stroke-dasharray="12 10"/>
+  <circle cx="110" cy="100" r="34" fill="#13c26b"/>
+  <text x="110" y="113" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="40" font-weight="700" fill="#ffffff">+</text>
+  <text x="180" y="88" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="40" font-weight="700" fill="#1f2328">Your brand here · 在这里展示你的品牌</text>
+  <text x="180" y="134" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="26" fill="#59636e">Sponsor Point Taken and reach people who work with AI every day.</text>
+</svg>
