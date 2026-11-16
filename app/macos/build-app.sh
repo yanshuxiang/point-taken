@@ -6,7 +6,8 @@ set -e
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."      # 仓库根目录：scripts/、models/、assets/ 在这里
-APP="/Applications/Point Taken.app"
+# 设了 POINT_TAKEN_APP 就只编到那个路径（打 dmg 用），不退出、不打开正在用的 App
+APP="${POINT_TAKEN_APP:-/Applications/Point Taken.app}"
 ID="io.github.yanshuxiang.pointtaken"
 # 记下真实的 SDK 版本：不然新版构建系统把 13.0 写成 SDK 版本，系统按 macOS 13 的老样子画界面（没有液态玻璃）
 export POINT_TAKEN_SDK_VERSION="${POINT_TAKEN_SDK_VERSION:-$(xcrun --sdk macosx --show-sdk-version)}"
@@ -14,12 +15,14 @@ export POINT_TAKEN_SDK_VERSION="${POINT_TAKEN_SDK_VERSION:-$(xcrun --sdk macosx 
 swift build -c release --package-path "$HERE" --product point-taken
 BIN="$(swift build -c release --package-path "$HERE" --show-bin-path)/point-taken"
 
-osascript -e "quit app id \"$ID\"" 2>/dev/null || true
-pkill -f "$APP/Contents/MacOS/point-taken" 2>/dev/null || true
-sleep 1
+if [ -z "$POINT_TAKEN_APP" ]; then
+  osascript -e "quit app id \"$ID\"" 2>/dev/null || true
+  pkill -f "$APP/Contents/MacOS/point-taken" 2>/dev/null || true
+  sleep 1
+fi
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$(dirname "$APP")" "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/point-taken"
 strip -S -x "$APP/Contents/MacOS/point-taken" || true
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
@@ -50,4 +53,5 @@ else
 fi
 codesign -d -r- "$APP" 2>&1 | tail -1
 echo "装好了：$APP"
-open "$APP"
+[ -z "$POINT_TAKEN_APP" ] && open "$APP"
+exit 0
