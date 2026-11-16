@@ -62,8 +62,8 @@ Point Taken is a macOS menu bar tool. Hold a shortcut, draw on your screen, and 
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/screenshots/01-main-window-light.png" alt="Main window, light"><br><sub>Main window (light)</sub></td>
-    <td width="50%" align="center"><img src="docs/screenshots/02-main-window-dark.png" alt="Main window, dark"><br><sub>Main window (dark)</sub></td>
+    <td width="50%" align="center"><img src="docs/screenshots/01-menu.png" alt="Menu bar menu"><br><sub>Everything starts from the menu bar</sub></td>
+    <td width="50%" align="center"><img src="docs/screenshots/02-settings-shortcuts.png" alt="Shortcut settings"><br><sub>Shortcuts you can change</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/03-shortcut-hints.png" alt="Shortcut hints on first start"><br><sub>First start: the shortcuts at a glance</sub></td>
@@ -85,25 +85,21 @@ Point Taken is a macOS menu bar tool. Hold a shortcut, draw on your screen, and 
 
 ## How it works
 
-1. Press <kbd>⌥</kbd> <kbd>N</kbd>. A small capsule appears and Point Taken starts listening.
-2. Hold <kbd>⌃</kbd> and draw while you talk. Each stroke and each sentence is timestamped.
-3. Press <kbd>⌥</kbd> <kbd>N</kbd> again to save the page and move to the next one. Long pages can be scrolled and stitched.
-4. Press <kbd>⌥</kbd> <kbd>↩</kbd>. Point Taken matches every sentence to the mark you were making when you said it.
-5. The note is pasted into the app in front, as images plus text. Check it, then send.
+1. Press <kbd>⌥</kbd> <kbd>N</kbd>. A capsule appears at the top of the screen and Point Taken starts recording.
+2. Hold <kbd>⌥</kbd> and draw while you talk. Let go and the mouse works normally again, so you can click and scroll to the next page.
+3. The capsule shows your words as you speak, plus tools for freehand, box, circle, undo and pause.
+4. Click **完成** (Done) on the capsule. The review window opens with every page and the words matched to each mark.
+5. Check it, then paste the note, as images plus text, into a chat, a document or an AI.
 
 ### Default shortcuts
 
 | Shortcut | Action |
 | --- | --- |
-| <kbd>⌥</kbd> <kbd>N</kbd> | Start marking; while marking, save this page and go to the next |
-| Hold <kbd>⌃</kbd> | Draw freehand |
-| <kbd>⌃</kbd> <kbd>⇧</kbd> | Draw a box |
-| <kbd>⌃</kbd> <kbd>⌥</kbd> | Draw an ellipse |
-| <kbd>⌥</kbd> <kbd>Z</kbd> | Undo the last stroke |
-| <kbd>⌥</kbd> <kbd>↩</kbd> | Finish and paste |
-| <kbd>⌥</kbd> <kbd>Esc</kbd> | Cancel |
+| <kbd>⌥</kbd> <kbd>N</kbd> | Start marking |
+| Hold <kbd>⌥</kbd> | Draw freehand while held |
+| Hold <kbd>⌥</kbd> <kbd>⇧</kbd> | Draw a box while held |
 
-Shortcuts can be changed under **Settings → Shortcuts**.
+Holding keys never blocks other apps: modifier-only shortcuts pass through, and the drawing stops when you let go. All shortcuts can be changed under **Settings → Shortcuts**.
 
 ## Speech options
 

@@ -62,8 +62,8 @@
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/screenshots/01-main-window-light.png" alt="主窗口（浅色）"><br><sub>主窗口（浅色）</sub></td>
-    <td width="50%" align="center"><img src="docs/screenshots/02-main-window-dark.png" alt="主窗口（深色）"><br><sub>主窗口（深色）</sub></td>
+    <td width="50%" align="center"><img src="docs/screenshots/01-menu.png" alt="菜单栏菜单"><br><sub>一切从菜单栏开始</sub></td>
+    <td width="50%" align="center"><img src="docs/screenshots/02-settings-shortcuts.png" alt="快捷键设置"><br><sub>快捷键可以自己改</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/03-shortcut-hints.png" alt="第一次开始时的快捷键提示"><br><sub>第一次开始：快捷键一目了然</sub></td>
@@ -85,25 +85,21 @@
 
 ## 怎么用
 
-1. 按 <kbd>⌥</kbd> <kbd>N</kbd>，屏幕上出现一个小胶囊，开始收音。
-2. 按住 <kbd>⌃</kbd> 在屏幕上画，同时说话。每一笔、每一句都带着时间。
-3. 再按 <kbd>⌥</kbd> <kbd>N</kbd> 存下这一页，切到下一页接着标；长页面可以滚动拼成长图。
-4. 按 <kbd>⌥</kbd> <kbd>↩</kbd>。懂你意思会把每句话对到你说这句话时正在画的那处标注上。
-5. 说明会以图片加文字的形式粘到当前在前台的应用里，检查一下再发送。
+1. 按 <kbd>⌥</kbd> <kbd>N</kbd>，屏幕顶部出现一个胶囊，开始录音。
+2. 按住 <kbd>⌥</kbd> 边说边画；松开就回到正常操作，可以照常点击、滚动到下一页。
+3. 胶囊里会实时显示你说的话，还有自由画、矩形、圆圈、撤销和暂停按钮。
+4. 点胶囊上的 **完成**，打开检查窗口：每一页截图，以及对到每处标注上的话。
+5. 检查好后，把图文一起粘贴到聊天软件、文档或 AI 对话框里。
 
 ### 默认快捷键
 
 | 快捷键 | 作用 |
 | --- | --- |
-| <kbd>⌥</kbd> <kbd>N</kbd> | 开始标注；标注中按下则存这一页，再切下一页 |
-| 按住 <kbd>⌃</kbd> | 画笔 |
-| <kbd>⌃</kbd> <kbd>⇧</kbd> | 画框 |
-| <kbd>⌃</kbd> <kbd>⌥</kbd> | 画圈 |
-| <kbd>⌥</kbd> <kbd>Z</kbd> | 撤销一笔 |
-| <kbd>⌥</kbd> <kbd>↩</kbd> | 完成并粘贴 |
-| <kbd>⌥</kbd> <kbd>Esc</kbd> | 取消 |
+| <kbd>⌥</kbd> <kbd>N</kbd> | 开始标注 |
+| 按住 <kbd>⌥</kbd> | 按住时自由画 |
+| 按住 <kbd>⌥</kbd> <kbd>⇧</kbd> | 按住时画矩形 |
 
-快捷键可以在 **设置 → 快捷键** 里修改。
+按住才生效，松开就回到正常操作；只用修饰键时不会拦下任何按键。所有快捷键都可以在 **设置 → 快捷键** 里修改。
 
 ## 语音转写
 

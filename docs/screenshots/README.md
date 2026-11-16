@@ -13,15 +13,15 @@
 
 | 文件名 | 拍什么 | 怎么拍 |
 | --- | --- | --- |
-| `01-main-window-light.png` | 主窗口，浅色模式，四项权限都是绿勾，「最近」里有几条记录 | ⌘⇧4 + 空格，点窗口 |
-| `02-main-window-dark.png` | 同一个窗口，深色模式 | 系统切到深色后同上 |
-| `03-shortcut-hints.png` | 刚按 ⌥N 时，胶囊下方的快捷键提示 | 整屏 |
+| `01-menu.png` | 点菜单栏图标弹出的菜单（开始标注、识别模型、历史记录、设置）（已绘制，非实拍） | 整屏后裁到菜单附近 |
+| `02-settings-shortcuts.png` | 设置 → 快捷键（已拍） | 窗口 |
+| `03-shortcut-hints.png` | 刚按 ⌥N 时，胶囊和第一次的提示 | 整屏 |
 | `04-live-captions.png` | **首图**：一边说话一边圈，胶囊里实时出字幕 | 整屏，画面里要有画好的圈 |
 | `05-drawing.png` | 同一页上有画笔、方框、椭圆三种标注 | 整屏 |
-| `06-pages-saved.png` | 按过两三次 ⌥N，胶囊右边显示「3 页」和缩略图 | 整屏 |
+| `06-pages-saved.png` | 按过两三次 ⌥N，胶囊右边显示「3 页」和缩略图（已绘制，非实拍） | 整屏 |
 | `07-review.png` | 检查窗口：几页截图，每处标注下面有对应的话 | 窗口 |
-| `08-pasted.png` | 粘贴到 AI 对话框（比如 ChatGPT / Claude）后的样子 | 窗口或整屏 |
-| `09-history.png` | 历史记录窗口，有几条不同日期的记录 | 窗口 |
+| `08-pasted.png` | 粘贴到 AI 对话框（比如 ChatGPT / Claude）后的样子（已绘制，非实拍） | 窗口或整屏 |
+| `09-history.png` | 历史记录窗口，有几条不同日期的记录（已绘制，非实拍） | 窗口 |
 | `10-settings-models.png` | 设置 → 模型与 API，显示本机模型和云端服务 | 窗口 |
 
 拍完放进本目录，提交时一起 `git add docs/screenshots`。旧的设计预览图在 `docs/board-preview/`，不再被 README 引用。
