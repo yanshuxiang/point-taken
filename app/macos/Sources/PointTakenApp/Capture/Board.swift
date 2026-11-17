@@ -124,23 +124,15 @@ final class BoardSession {
         configureControls()
     }
 
-    /// the tool the pen button turns back on (the last one used; freehand at first)
-    private var lastTool: InkTool = .free
-
-    /// The capsule's one row of controls, like the website's demo: the pen (on: drawing with the last tool, off:
-    /// normal operation), the three shapes (the hold-to-draw key on each that has one), undo; pause; 完成.
+    /// The capsule's one row of controls: the three shapes (click one to keep drawing with it, click it again to go
+    /// back to normal operation; the hold-to-draw key on each that has one), undo; pause; 完成.
     private func configureControls() {
         capsule.setControls(Self.capsuleControls(
             tool: selectedTool, paused: paused,
-            pen: { [weak self] in
-                guard let self else { return }
-                self.holdKeys.release()
-                if self.selectedTool == nil { self.selectTool(self.lastTool); self.keyTip(self.lastTool) } else { self.selectTool(nil) }
-            },
             use: { [weak self] tool in
                 guard let self else { return }
                 self.holdKeys.release()
-                if self.selectedTool == tool { self.selectTool(nil) } else { self.lastTool = tool; self.selectTool(tool); self.keyTip(tool) }
+                if self.selectedTool == tool { self.selectTool(nil) } else { self.selectTool(tool); self.keyTip(tool) }
             },
             undo: { [weak self] in self?.undo() }, pause: { [weak self] in self?.togglePause() },
             save: { [weak self] in self?.nextPage() }, finish: { [weak self] in self?.finish() }))
@@ -158,7 +150,7 @@ final class BoardSession {
     }
     static let keyTipTimes = 5
 
-    static func capsuleControls(tool selected: InkTool?, paused: Bool, pen: @escaping () -> Void, use: @escaping (InkTool) -> Void,
+    static func capsuleControls(tool selected: InkTool?, paused: Bool, use: @escaping (InkTool) -> Void,
                                 undo: @escaping () -> Void, pause: @escaping () -> Void, save: @escaping () -> Void,
                                 finish: @escaping () -> Void) -> [BoardCapsule.Control] {
         func shape(_ tool: InkTool, _ symbol: String, _ name: String) -> BoardCapsule.Control {
@@ -168,10 +160,7 @@ final class BoardSession {
                 use(tool)
             }
         }
-        let drawing = selected != nil
         return [
-            .init(title: drawing ? "正常操作" : "画笔", symbol: "pencil", kind: .toggle, on: drawing,
-                  tip: drawing ? "回到正常操作（点击、滚动都交给下面的程序）" : "开始画（用上次的工具）", run: pen),
             shape(.free, "scribble", "自由画"),
             shape(.box, "rectangle", "矩形"),
             shape(.ellipse, "circle", "圆圈"),
@@ -3222,7 +3211,7 @@ enum BoardPreview {
         let thumbs = (0..<3).map { i in sampleScreen(CGSize(width: 1440, height: 900), hue: 0.55 + CGFloat(i) * 0.08) }.map(BoardSession.thumbnail)
         let ok = [(BoardCapsule.Warning)]()
         func controls(_ tool: InkTool?, paused: Bool = false) -> [BoardCapsule.Control] {
-            BoardSession.capsuleControls(tool: tool, paused: paused, pen: {}, use: { _ in }, undo: {}, pause: {}, save: {}, finish: {})
+            BoardSession.capsuleControls(tool: tool, paused: paused, use: { _ in }, undo: {}, pause: {}, save: {}, finish: {})
         }
         func capsule(_ f: (BoardCapsule) -> Void) -> BoardCapsule { let c = BoardCapsule(); f(c); return c }
 

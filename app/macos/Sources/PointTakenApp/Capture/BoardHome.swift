@@ -246,7 +246,7 @@ enum BoardStartupCheck {
                         capsule.update(page: 2, words: "恢复转写", mic: .live, warnings: [], hints: false)
                         check("compact")
                         capsule.setExpanded(true)
-                        capsule.setControls(BoardSession.capsuleControls(tool: .box, paused: false, pen: {}, use: { _ in }, undo: {},
+                        capsule.setControls(BoardSession.capsuleControls(tool: .box, paused: false, use: { _ in }, undo: {},
                                                                           pause: {}, save: {}, finish: {}))
                         let sample = NSImage(size: NSSize(width: 100, height: 60))
                         sample.lockFocus(); NSColor.systemBlue.setFill(); NSRect(x: 0, y: 0, width: 100, height: 60).fill(); sample.unlockFocus()
