@@ -6,11 +6,14 @@
 
 [![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)](app/macos/Package.swift)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](#系统要求)
+[![Windows](https://img.shields.io/badge/Windows-即将到来-0078D4)](#)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](scripts/.python-version)
 [![sherpa-onnx](https://img.shields.io/badge/sherpa--onnx-1.13-6E40C9)](https://github.com/k2-fsa/sherpa-onnx)
-[![License](https://img.shields.io/badge/License-MIT-13C26B)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0-13C26B)](LICENSE)
 
 **一边说、一边在屏幕上圈圈画画，就能把你的意思讲清楚。**
+
+🍎 **macOS 版已发布** —— [下载最新版本](https://github.com/yanshuxiang/point-taken/releases/latest) · 🪟 **Windows 版正在测试，即将到来**
 
 [English](README.md) | 中文
 
@@ -194,4 +197,6 @@ uv run --with numpy --with pytest pytest tests/test_asr_select.py -q
 
 ## 许可证
 
-[MIT](LICENSE)
+懂你意思（Point Taken）采用 [GNU 通用公共许可证 v3.0（GPL-3.0）](LICENSE)。你可以自由使用、修改和分享；但如果你发布修改后的版本，也必须以同样的协议公开源代码。
+
+本项目最初基于 [Blurt](https://github.com/AGIHunt/blurt)（MIT 协议），其原始版权声明保留在 [NOTICE](NOTICE) 中。

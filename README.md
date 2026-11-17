@@ -6,11 +6,14 @@
 
 [![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)](app/macos/Package.swift)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](#requirements)
+[![Windows](https://img.shields.io/badge/Windows-coming%20soon-0078D4)](#)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](scripts/.python-version)
 [![sherpa-onnx](https://img.shields.io/badge/sherpa--onnx-1.13-6E40C9)](https://github.com/k2-fsa/sherpa-onnx)
-[![License](https://img.shields.io/badge/License-MIT-13C26B)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0-13C26B)](LICENSE)
 
 **Talk while you mark up your screen, and get your point across.**
+
+🍎 **macOS: available now** — [download the latest release](https://github.com/yanshuxiang/point-taken/releases/latest) · 🪟 **Windows: in testing, coming soon**
 
 English | [中文](README.zh-CN.md)
 
@@ -194,4 +197,6 @@ Every Python test run gets its own temporary `POINT_TAKEN_HOME`, so tests never 
 
 ## License
 
-[MIT](LICENSE)
+Point Taken is licensed under the [GNU General Public License v3.0](LICENSE). You can use, change and share it freely, but if you distribute a modified version, you must release its source code under the same license.
+
+Point Taken started from [Blurt](https://github.com/AGIHunt/blurt) (MIT); its original notice is kept in [NOTICE](NOTICE).
