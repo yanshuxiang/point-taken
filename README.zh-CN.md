@@ -26,24 +26,32 @@
 
 ## ❤️ 赞助商
 
-> [想出现在这里？](https://github.com/yanshuxiang/point-taken/issues)
+> 想出现在这里？发邮件到 [xinyuanzaizhe@gmail.com](mailto:xinyuanzaizhe@gmail.com)
 
 <details open>
 <summary>点击收起</summary>
 
 <!--
-  添加赞助商：把下面的占位内容换成：
+  添加赞助商：在下面的表格里加一行：
 
-  <a href="https://sponsor.example"><img src="assets/sponsors/name.png" alt="赞助商名称" width="100%"></a>
+  <tr>
+  <td width="180"><a href="https://sponsor.example"><img src="assets/sponsors/name.svg" alt="赞助商名称"></a></td>
+  <td>感谢 赞助商 赞助本项目！<a href="https://sponsor.example">赞助商</a> 是……一两句话介绍。</td>
+  </tr>
 
-  **[赞助商名称](https://sponsor.example)** —— 一两句话介绍赞助商。
-
-  横幅放在 assets/sponsors/（1200×200 的 PNG 或 SVG 效果最好）。多个赞助商之间用一行 --- 隔开。
+  标志放在 assets/sponsors/（600×200 的 SVG 或 PNG 效果最好）。
 -->
 
-<a href="https://github.com/yanshuxiang/point-taken/issues"><img src="assets/sponsors/placeholder-banner.svg" alt="在这里展示你的品牌" width="100%"></a>
-
-**在这里展示你的品牌** —— 懂你意思的用户每天都在给同事和 AI 讲清楚自己的想法。赞助本项目，你的横幅和简介就会出现在这里。
+<table>
+<tr>
+<td width="180" align="center"><a href="https://www.douyin.com/user/MS4wLjABAAAAzRM2Reu24mscMJE0V0gJrEC8y5Ija30YyzYGbwtZ4xcDcIRh9l8q8iQ27-0mL-Qz"><img src="assets/sponsors/mai-yingyu-de-xiaohuochai.svg" alt="卖英语的小火柴" width="160"></a></td>
+<td>感谢 卖英语的小火柴 赞助本项目！<a href="https://www.douyin.com/user/MS4wLjABAAAAzRM2Reu24mscMJE0V0gJrEC8y5Ija30YyzYGbwtZ4xcDcIRh9l8q8iQ27-0mL-Qz">卖英语的小火柴</a> 是抖音上的英语学习博主，用最通俗易懂的动画讲英语，有「实景英语」和「外刊解读」等系列，带你在真实场景和外刊原文里学英语。欢迎去 <a href="https://www.douyin.com/user/MS4wLjABAAAAzRM2Reu24mscMJE0V0gJrEC8y5Ija30YyzYGbwtZ4xcDcIRh9l8q8iQ27-0mL-Qz">抖音主页</a> 关注。</td>
+</tr>
+<tr>
+<td width="180" align="center"><a href="https://space.bilibili.com/695032460"><img src="assets/sponsors/xinyuan-zaizhe.svg" alt="心远在这" width="160"></a></td>
+<td>感谢 心远在这 赞助本项目！<a href="https://space.bilibili.com/695032460">心远在这</a> 是 B 站教育区 UP 主，把大学理工科课程做成直观的动画：高数、线代、模电、工程电磁学，还有 RoboMaster 视觉和 ROS 2 入门。想把难懂的课轻松看懂，欢迎去 <a href="https://space.bilibili.com/695032460">B 站主页</a> 关注。</td>
+</tr>
+</table>
 
 </details>
 
@@ -161,7 +169,7 @@ scripts/                App 通过 uv 调用的 Python 脚本
   polish_cloud.py         同样的整理，交给你配置的云端模型
   *_models.json           模型清单
 models/                 随仓库附带的 Silero VAD 模型
-assets/                 App 图标和赞助商横幅
+assets/                 App 图标和赞助商标志
 tests/                  Python 测试（pytest）
 docs/                   设计笔记、调研记录和截图
 ```

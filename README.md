@@ -26,24 +26,32 @@ Point Taken is a macOS menu bar tool. Hold a shortcut, draw on your screen, and 
 
 ## ❤️ Sponsors
 
-> [Want to appear here?](https://github.com/yanshuxiang/point-taken/issues)
+> Want to appear here? Email [xinyuanzaizhe@gmail.com](mailto:xinyuanzaizhe@gmail.com)
 
 <details open>
 <summary>Click to collapse</summary>
 
 <!--
-  To add a sponsor, replace the placeholder below with:
+  To add a sponsor, add a row to the table below:
 
-  <a href="https://sponsor.example"><img src="assets/sponsors/name.png" alt="Sponsor name" width="100%"></a>
+  <tr>
+  <td width="180"><a href="https://sponsor.example"><img src="assets/sponsors/name.svg" alt="Sponsor name"></a></td>
+  <td>Thanks to Sponsor for sponsoring this project! <a href="https://sponsor.example">Sponsor</a> is … one or two sentences.</td>
+  </tr>
 
-  **[Sponsor name](https://sponsor.example)** — one or two sentences about the sponsor.
-
-  Put the banner in assets/sponsors/ (1200×200 PNG or SVG works best). Separate sponsors with a --- line.
+  Put the logo in assets/sponsors/ (a 600×200 SVG or PNG works best).
 -->
 
-<a href="https://github.com/yanshuxiang/point-taken/issues"><img src="assets/sponsors/placeholder-banner.svg" alt="Your brand here" width="100%"></a>
-
-**Your brand here** — Point Taken is used by people who explain their work to teammates and AI every day. Sponsor the project to put your banner and a short description in this spot.
+<table>
+<tr>
+<td width="180" align="center"><a href="https://www.douyin.com/user/MS4wLjABAAAAzRM2Reu24mscMJE0V0gJrEC8y5Ija30YyzYGbwtZ4xcDcIRh9l8q8iQ27-0mL-Qz"><img src="assets/sponsors/mai-yingyu-de-xiaohuochai.svg" alt="卖英语的小火柴" width="160"></a></td>
+<td>Thanks to 卖英语的小火柴 for sponsoring this project! <a href="https://www.douyin.com/user/MS4wLjABAAAAzRM2Reu24mscMJE0V0gJrEC8y5Ija30YyzYGbwtZ4xcDcIRh9l8q8iQ27-0mL-Qz">卖英语的小火柴</a> is a Douyin creator who explains English in plain, easy-to-follow animations, with series on real-life English and reading foreign news and magazines. Follow on <a href="https://www.douyin.com/user/MS4wLjABAAAAzRM2Reu24mscMJE0V0gJrEC8y5Ija30YyzYGbwtZ4xcDcIRh9l8q8iQ27-0mL-Qz">Douyin</a> to make English learning simple.</td>
+</tr>
+<tr>
+<td width="180" align="center"><a href="https://space.bilibili.com/695032460"><img src="assets/sponsors/xinyuan-zaizhe.svg" alt="心远在这" width="160"></a></td>
+<td>Thanks to 心远在这 for sponsoring this project! <a href="https://space.bilibili.com/695032460">心远在这</a> is a Bilibili creator who turns university STEM courses into clear animations: calculus, linear algebra, analog electronics, electromagnetics, RoboMaster vision and ROS 2. Follow on <a href="https://space.bilibili.com/695032460">Bilibili</a> to learn the hard parts the easy way.</td>
+</tr>
+</table>
 
 </details>
 
@@ -161,7 +169,7 @@ scripts/                Python scripts the app runs through uv
   polish_cloud.py         The same clean-up through a cloud model you configure
   *_models.json           Model registries
 models/                 Bundled Silero VAD model
-assets/                 App icons and sponsor banners
+assets/                 App icons and sponsor logos
 tests/                  Python tests (pytest)
 docs/                   Design notes, investigation write-ups and screenshots
 ```
