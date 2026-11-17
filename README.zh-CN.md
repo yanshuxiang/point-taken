@@ -27,6 +27,13 @@
 
 懂你意思（Point Taken）是一个 macOS 菜单栏小工具：按住快捷键，在屏幕上标注，同时说出你想说的话。它会把截图、标注和你说的话按时间对齐，整理成一份带图的说明，一次粘贴给同事或 AI。
 
+## 🎬 演示视频
+
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV1tUsB6nE7d/"><img src="docs/screenshots/video-cover.jpg" alt="懂你意思演示视频" width="800"></a>
+  <br><sub>点击图片到 B 站观看</sub>
+</p>
+
 ## ❤️ 赞助商
 
 > 想出现在这里？发邮件到 [xinyuanzaizhe@gmail.com](mailto:xinyuanzaizhe@gmail.com)

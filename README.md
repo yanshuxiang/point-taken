@@ -27,6 +27,13 @@ English | [中文](README.zh-CN.md)
 
 Point Taken is a macOS menu bar tool. Hold a shortcut, draw on your screen, and say what you mean. It lines up the screenshots, your marks and your words by time, and turns them into one illustrated note you can paste to a teammate or an AI in one go.
 
+## 🎬 Demo video
+
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV1tUsB6nE7d/"><img src="docs/screenshots/video-cover.jpg" alt="Point Taken demo video" width="800"></a>
+  <br><sub>Click to watch on Bilibili (in Chinese)</sub>
+</p>
+
 ## ❤️ Sponsors
 
 > Want to appear here? Email [xinyuanzaizhe@gmail.com](mailto:xinyuanzaizhe@gmail.com)
