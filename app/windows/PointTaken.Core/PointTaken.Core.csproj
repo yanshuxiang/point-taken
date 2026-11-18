@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Point Taken for Windows: everything that is not UI. File formats shared with the macOS app (页面.json,
+       时间线.json, 转写状态.json …), the hand-off text, ink geometry, page detection, the script runner. Tested by
+       PointTaken.Core.Tests; the WPF app (PointTaken.App) is the only other user. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>PointTaken.Core</RootNamespace>
+  </PropertyGroup>
+</Project>

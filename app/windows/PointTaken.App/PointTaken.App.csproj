@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Point Taken for Windows (懂你意思): the tray app. Capture/ (session, capsule, ink overlay, screen feed, audio,
+       live speech), Review/ (the check window and its mark canvas), History/, Settings/, System/ (Win32 interop,
+       hotkeys, paste, secrets). The Python scripts and models are copied next to the executable at build time. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>PointTaken.App</RootNamespace>
+    <AssemblyName>PointTaken</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <Version>0.1.1</Version>
+    <Product>Point Taken</Product>
+    <Company>Point Taken</Company>
+    <Copyright>GPL-3.0</Copyright>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- WinForms is used only for the tray icon; keep WPF's names unambiguous -->
+    <NoWarn>$(NoWarn);CA1416;WFAC010</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PointTaken.Core\PointTaken.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Assets\icon.png" />
+    <Resource Include="Assets\tray.png" />
+    <Content Include="Assets\icon.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- the scripts and the bundled VAD model run from next to the executable (Paths.SkillDir) -->
+  <ItemGroup>
+    <Content Include="..\..\..\scripts\*.py;..\..\..\scripts\*.json" Link="scripts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\models\silero_vad.onnx" Link="models\silero_vad.onnx" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
