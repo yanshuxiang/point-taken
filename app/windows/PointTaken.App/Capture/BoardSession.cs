@@ -146,6 +146,7 @@ public sealed class BoardSession
             lock (timeline.Evidence.Inputs) BoardScrollInput.Append(new BoardInput { Kind = kind, At = clock.Elapsed(at), Dy = dy }, timeline.Evidence.Inputs);
         };
         screenFeed.OnKeyDown = vk => holdKeys.KeyPressed(vk);
+        screenFeed.OnWheel = () => holdKeys.Interrupt();
         screenFeed.OnTransition = (old, next, scrolling) => Transition(old, next, scrolling);
         screenFeed.OnLeave = frame => { AutoPage(frame); KeepSpoken(frame, speech.FullText.Length); };
         screenFeed.OnFailure = error => { screenWarning = "自动留页不可用：" + error; Refresh(); };
@@ -191,6 +192,7 @@ public sealed class BoardSession
     public void PrepareForQuit(Action done)
     {
         review?.CloseSaving();
+        foreach (var w in archiveReviews.Values.ToList()) w.CloseSaving();
         if (Finalizing) { speech.StopForQuit(_ => BoardFileWriter.WhenFinished(done, ui)); return; }
         if (!Active) { BoardFileWriter.WhenFinished(done, ui); return; }
         KeepPage(always: false, then: _ => { }, finishing: true);
@@ -616,15 +618,22 @@ public sealed class BoardSession
         }, ui);
     }
 
+    /// review windows opened from History, by record folder: one per record, and History leaves their records alone
+    readonly Dictionary<string, Review.ReviewWindow> archiveReviews = new(StringComparer.OrdinalIgnoreCase);
+
     public bool IsReviewing(string directory) =>
-        string.Equals(record?.Directory, directory, StringComparison.OrdinalIgnoreCase) && (review != null || Active || Finalizing);
+        archiveReviews.ContainsKey(directory)
+        || (string.Equals(record?.Directory, directory, StringComparison.OrdinalIgnoreCase) && (review != null || Active || Finalizing));
 
     /// History → 打开: the review window for a saved record.
     public void OpenArchive(string directory)
     {
         if (IsReviewing(directory)) { if (review != null) review.ShowAndActivate(); else if (Active) Capsule.TogglePreview(); return; }
+        if (archiveReviews.TryGetValue(directory, out var existing)) { existing.ShowAndActivate(); return; }
         var rec = BoardRecord.Load(directory);
         var window = new Review.ReviewWindow(rec, finalizing: false, warning: null);
+        archiveReviews[directory] = window;
+        window.Closed += (_, _) => { archiveReviews.Remove(directory); StateChanged?.Invoke(); };
         window.ShowAndActivate();
     }
 

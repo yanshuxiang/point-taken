@@ -804,7 +804,9 @@ public sealed class ReviewWindow : MacWindow
         if (selected is not { } s || Sheet(s).IndexOf(number) < 0) return;
         var probe = Sheet(s);
         if (!probe.SetNote(text, number)) return;
-        Edit(s, "修改说明", sheet => sheet.SetNote(text, number));
+        keepCards = true;
+        try { Edit(s, "修改说明", sheet => sheet.SetNote(text, number)); }
+        finally { keepCards = false; }
     }
 
     void MarkSelected(int? number)
@@ -1002,10 +1004,23 @@ public sealed class ReviewWindow : MacWindow
 
     // ── the marks list (标记) ──
 
-    readonly Dictionary<int, (Border card, TextBox field, Button trash)> cards = new();
+    readonly Dictionary<int, (Border card, TextBox field, Button trash, TextBlock meta)> cards = new();
+    bool keepCards;
 
     void MarksChanged()
     {
+        // a note was written: the cards stay (rebuilding them would take the keyboard from the field just clicked)
+        if (keepCards && selected is { } k && k < pages.Count && shownImage != null)
+        {
+            var current = Sheet(k).Evidence;
+            if (current.Select(m => m.Number).SequenceEqual(cards.Keys))
+            {
+                var near = evidence?.Said(current, pages[k].ContextIDs) ?? new();
+                foreach (var mark in current)
+                    if (cards.TryGetValue(mark.Number, out var c)) FillMeta(c.meta, TimeOf(mark), Quoted(near.GetValueOrDefault(mark.Number) ?? new()), mark.Note ?? "");
+                return;
+            }
+        }
         markList.Children.Clear();
         cards.Clear();
         var page = selected is { } s && s < pages.Count && shownImage != null;
@@ -1015,14 +1030,7 @@ public sealed class ReviewWindow : MacWindow
             var marks = Sheet(i).Evidence;
             var around = evidence?.Said(marks, pages[i].ContextIDs) ?? new();
             foreach (var mark in marks)
-            {
-                string time;
-                if (mark.Start?.Audio is { } a) time = BoardSpeechBlock.Clock(a);
-                else if (mark.IsAdded) time = "补画";
-                else if (mark.Start?.Elapsed is { } el) time = "会话 " + BoardSpeechBlock.Clock(el);
-                else time = "未记录";
-                markList.Children.Add(Card(mark.Number, time, Quoted(around.GetValueOrDefault(mark.Number) ?? new()), mark.Note ?? ""));
-            }
+                markList.Children.Add(Card(mark.Number, TimeOf(mark), Quoted(around.GetValueOrDefault(mark.Number) ?? new()), mark.Note ?? ""));
         }
         marksEmptyTitle.Text = page ? "这一页还没有标记" : "没有选中的页面";
         marksEmptyDetail.Text = page ? "用左边的画笔在图上画一笔，再在这里写说明" : "在左边选一页";
@@ -1033,6 +1041,28 @@ public sealed class ReviewWindow : MacWindow
             fixButton.Visibility = Visibility.Collapsed;
             note.Text = "所有标记都有说明了"; note.Foreground = Mac.Secondary;
         }
+    }
+
+    static string TimeOf(BoardMarkEvidence mark)
+    {
+        if (mark.Start?.Audio is { } a) return BoardSpeechBlock.Clock(a);
+        if (mark.IsAdded) return "补画";
+        if (mark.Start?.Elapsed is { } el) return "会话 " + BoardSpeechBlock.Clock(el);
+        return "未记录";
+    }
+
+    /// The card's quiet line: when it was drawn, then what was said near it; with neither a note nor speech, says so.
+    static void FillMeta(TextBlock meta, string time, string? quote, string noteText)
+    {
+        meta.Inlines.Clear();
+        meta.Inlines.Add(new System.Windows.Documents.Run(time) { FontFamily = Mac.Digits });
+        if (quote != null) meta.Inlines.Add(new System.Windows.Documents.Run("   " + quote));
+        else if (noteText.Trim().Length == 0)
+        {
+            meta.Inlines.Add(new System.Windows.Documents.Run(" · "));
+            meta.Inlines.Add(new System.Windows.Documents.Run("还没有说明") { Foreground = Mac.Orange });
+        }
+        meta.ToolTip = quote == null && noteText.Trim().Length == 0 ? "这个标记没有说明，画它的时候和前后几秒也没有说话：AI 只会看到编号" : quote;
     }
 
     static string? Quoted(List<BoardSpeechSegment> said)
@@ -1064,14 +1094,7 @@ public sealed class ReviewWindow : MacWindow
         field.GotKeyboardFocus += (_, _) => { if (markCanvas.Selected != number) markCanvas.Selected = number; };
         var fieldGrid = new Grid(); fieldGrid.Children.Add(field); fieldGrid.Children.Add(placeholder);
         var meta = new TextBlock { FontSize = Mac.Subheadline, FontFamily = Mac.Font, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0), Foreground = Mac.Secondary };
-        meta.Inlines.Add(new System.Windows.Documents.Run(time) { FontFamily = Mac.Digits });
-        if (quote != null) meta.Inlines.Add(new System.Windows.Documents.Run("   " + quote));
-        else if (noteText.Length == 0)
-        {
-            meta.Inlines.Add(new System.Windows.Documents.Run(" · "));
-            meta.Inlines.Add(new System.Windows.Documents.Run("还没有说明") { Foreground = Mac.Orange });
-        }
-        meta.ToolTip = quote == null && noteText.Length == 0 ? "这个标记没有说明，画它的时候和前后几秒也没有说话：AI 只会看到编号" : quote;
+        FillMeta(meta, time, quote, noteText);
         var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         texts.Children.Add(fieldGrid); texts.Children.Add(meta);
         var trash = Mac.Icon(Icons.Trash, "删除这个标记（可以 Ctrl+Z 撤销）", () => DeleteMark(number), Mac.Hit, 15);
@@ -1088,7 +1111,7 @@ public sealed class ReviewWindow : MacWindow
         card.MouseEnter += (_, _) => { if (editable) trash.Visibility = Visibility.Visible; };
         card.MouseLeave += (_, _) => { if (markCanvas.Selected != number) trash.Visibility = Visibility.Hidden; };
         card.MouseLeftButtonDown += (_, _) => markCanvas.Selected = number;
-        cards[number] = (card, field, trash);
+        cards[number] = (card, field, trash, meta);
         return card;
     }
 

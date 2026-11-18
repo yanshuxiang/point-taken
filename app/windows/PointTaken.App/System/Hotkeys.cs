@@ -158,10 +158,17 @@ public sealed class HoldKeys
     {
         if (Capture.ScreenFeed.IsModifier(vk)) return;
         if (Native.Down(Native.VK_CONTROL) || Native.Down(Native.VK_MENU) || Native.Down(Native.VK_LWIN) || Native.Down(Native.VK_RWIN))
-        {
-            shortcut = true;
-            pendingTool = null;
-        }
+            Interrupt();
+    }
+
+    /// The modifiers held now are a shortcut for the app in front (Ctrl+C, Ctrl+wheel): no pen for this press, and a
+    /// pen the hold already turned on goes back to what was on before, so the overlay stops taking the mouse.
+    public void Interrupt()
+    {
+        if (Match() == null) return;
+        shortcut = true;
+        pendingTool = null;
+        if (held is { } h) { held = null; Release?.Invoke(h.before); }
     }
 
     /// Lets go of a held tool without restoring anything (the user picked a tool in the capsule).

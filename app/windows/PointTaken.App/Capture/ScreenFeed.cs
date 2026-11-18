@@ -20,6 +20,8 @@ public sealed class ScreenFeed
     public Action<string>? OnFailure;
     /// any key went down (another app's); the hold-to-draw keys use it to tell a shortcut from a hold
     public Action<int>? OnKeyDown;
+    /// the wheel turned (with a hold-to-draw key down it is Ctrl+wheel for the app, not drawing)
+    public Action? OnWheel;
 
     public BoardMotionMask Motion { get; } = new();
     public ScreenFrame? Current { get; private set; }
@@ -27,6 +29,8 @@ public sealed class ScreenFeed
     BoardPageGate gate = new();
     double lastScroll = double.NegativeInfinity, lastPress = double.NegativeInfinity;
     volatile bool capturePaused;
+    /// a frame waiting for the UI thread: no new capture until it is taken (bounds memory when the UI is busy)
+    int delivering;
     bool paused;
     public bool Paused { get => paused; set { paused = value; capturePaused = value; } }
 
@@ -65,7 +69,7 @@ public sealed class ScreenFeed
         while (!token.IsCancellationRequested)
         {
             var began = Stopwatch.GetTimestamp();
-            if (!capturePaused)
+            if (!capturePaused && Volatile.Read(ref delivering) == 0)
             {
                 try
                 {
@@ -76,11 +80,16 @@ public sealed class ScreenFeed
                         var print = pixels.Fingerprint();
                         var context = WindowContext.Front();
                         var at = Uptime.Now;
-                        ui.BeginInvoke(() => Deliver(new ScreenFrame
+                        Interlocked.Exchange(ref delivering, 1);
+                        ui.BeginInvoke(() =>
                         {
-                            Image = pixels, Display = display, Scene = context.Scene + ":" + display.Device,
-                            AppName = context.App, Title = context.Title, Fingerprint = print, CapturedAt = at,
-                        }, token));
+                            Interlocked.Exchange(ref delivering, 0);
+                            Deliver(new ScreenFrame
+                            {
+                                Image = pixels, Display = display, Scene = context.Scene + ":" + display.Device,
+                                AppName = context.App, Title = context.Title, Fingerprint = print, CapturedAt = at,
+                            }, token);
+                        });
                         failures = 0;
                     }
                 }
@@ -153,6 +162,7 @@ public sealed class ScreenFeed
                 var now = Uptime.Now;
                 lastScroll = now;
                 Motion.Reset();
+                OnWheel?.Invoke();
                 // wheel up (positive) shows what is above: content moves down, dy positive, like the macOS sign
                 if (delta != 0) OnInput?.Invoke(BoardInputKind.scroll, delta / 120.0 * 10, now);
                 gate.Interaction(now, scroll: true);
@@ -207,7 +217,7 @@ static class GdiCapture
         var old = Native.SelectObject(mem, dib);
         try
         {
-            if (!Native.BitBlt(mem, 0, 0, m.Width, m.Height, screen, m.X, m.Y, Native.SRCCOPY | Native.CAPTUREBLT))
+            if (!Native.BitBlt(mem, 0, 0, m.Width, m.Height, screen, m.X, m.Y, Native.SRCCOPY))
                 throw new InvalidOperationException("截图失败");
             var data = new byte[m.Width * m.Height * 4];
             Marshal.Copy(bits, data, 0, data.Length);

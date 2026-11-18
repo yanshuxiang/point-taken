@@ -16,6 +16,7 @@ namespace PointTaken.App.Settings;
 public sealed class SettingsWindow : MacWindow
 {
     static SettingsWindow? open;
+    Action? noticesListener;
     public static Action? HotkeysChanged;
     readonly StackPanel sidebarItems = new() { Margin = new Thickness(10, 0, 10, 0) };
     readonly ScrollViewer page = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false };
@@ -64,6 +65,7 @@ public sealed class SettingsWindow : MacWindow
         Grid.SetColumn(page, 1);
         grid.Children.Add(page);
         Body = grid;
+        Closed += (_, _) => { if (noticesListener != null) Notices.Changed -= noticesListener; };
     }
 
     static StackPanel Ui2Row(params UIElement[] items)
@@ -216,7 +218,10 @@ public sealed class SettingsWindow : MacWindow
                 list.Children.Add(Row(n.Text, n.At.ToString("M月d日 HH:mm"), null, minHeight: 40));
         }
         Fill();
-        Notices.Changed += () => Dispatcher.BeginInvoke(Fill);
+        // one listener per window, replaced each time the page is built, gone with the window
+        if (noticesListener != null) Notices.Changed -= noticesListener;
+        noticesListener = () => Dispatcher.BeginInvoke(Fill);
+        Notices.Changed += noticesListener;
         var clear = Mac.Push("清空", () => { Notices.Clear(); Fill(); }, height: 28, size: Mac.Callout);
         var header = new DockPanel { Margin = new Thickness(Mac.GroupGap, 0, 0, Mac.Inner) };
         DockPanel.SetDock(clear, Dock.Right);
@@ -399,7 +404,11 @@ public sealed class SettingsWindow : MacWindow
         Fields();
         stack.Children.Add(fieldsHost);
         stack.Children.Add(test);
+        var before = CloudService.All.SelectMany(s => s.Fields).Select(f => f.Variable).Distinct().ToDictionary(v => v, Secrets.Get);
+        var saved = false;
         void Save() { foreach (var (k, v) in inputs) Secrets.Set(k, v()); }
+        void Revert() { if (!saved) foreach (var (k, v) in before) if (Secrets.Get(k) != v) Secrets.Set(k, v); }
+        sheet.Closed += (_, _) => Revert();
         sheet.Body(stack,
             ("测试", false, async () =>
             {
@@ -414,7 +423,7 @@ public sealed class SettingsWindow : MacWindow
                 catch (ScriptFailure e) { test.Text = BoardModelStatus.FailureText(e.Code); test.Foreground = Mac.Attention; }
             }),
             ("取消", false, () => sheet.Close()),
-            ("保存", true, () => { Save(); sheet.Close(); _ = SpeechModels.Load(); }));
+            ("保存", true, () => { Save(); saved = true; sheet.Close(); _ = SpeechModels.Load(); }));
         sheet.ShowDialog();
         if (current == "模型与 API") Show("模型与 API");
     }

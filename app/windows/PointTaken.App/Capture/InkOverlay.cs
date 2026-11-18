@@ -80,6 +80,8 @@ public sealed class InkOverlay : Window
             Place();
             HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
         };
+        // moving onto a display with another scale makes WPF resize the window by that scale: cover the display again
+        DpiChanged += (_, _) => Dispatcher.BeginInvoke(Place);
         MouseLeftButtonDown += (_, e) => { if (penOn) { Begin(ToPt(e.GetPosition(canvas))); CaptureMouse(); e.Handled = true; } };
         MouseMove += (_, e) =>
         {

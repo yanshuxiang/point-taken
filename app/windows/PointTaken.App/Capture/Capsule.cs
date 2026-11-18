@@ -223,8 +223,13 @@ public sealed class Capsule : Window
     }
 
     /// Grows out of the top edge like the Dynamic Island: a small pill springs down and out to full size.
+    int hideGeneration;
+
     void Appear()
     {
+        // a hide still animating is called off: its end must not take this showing away
+        hideGeneration++;
+        BeginAnimation(OpacityProperty, null);
         Opacity = 1;
         if (!IsVisible) Show();
         UpdateLayout();
@@ -246,8 +251,10 @@ public sealed class Capsule : Window
         pillScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.34, TimeSpan.FromMilliseconds(240)) { EasingFunction = exit });
         pillScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.42, TimeSpan.FromMilliseconds(240)) { EasingFunction = exit });
         var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(200)) { BeginTime = TimeSpan.FromMilliseconds(40), EasingFunction = exit };
+        var generation = ++hideGeneration;
         fade.Completed += (_, _) =>
         {
+            if (generation != hideGeneration) return;
             base.Hide();
             BeginAnimation(OpacityProperty, null); Opacity = 1;
             pillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null); pillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);

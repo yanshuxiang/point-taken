@@ -32,6 +32,7 @@ public static class SelfCheck
         try { CapsuleRender(outDir); } catch (Exception e) { Report("capsule_render", false, e.ToString()); }
         try { ReviewRender(outDir); } catch (Exception e) { Report("review_render", false, e.ToString()); }
         try { Microphone(); } catch (Exception e) { Report("microphone", false, e.Message); }
+        try { Audio16k(outDir); } catch (Exception e) { Report("audio_16k", false, e.Message); }
         Report("uv", ScriptRunner.UvPath != null, ScriptRunner.UvPath ?? "missing");
         Report("scripts", File.Exists(Path.Combine(Paths.Scripts, "board_live.py")), Paths.Scripts);
         return failures == 0 ? 0 : 1;
@@ -180,6 +181,24 @@ public static class SelfCheck
         Report("review_render", File.Exists(path), $"{content.ActualWidth:0}x{content.ActualHeight:0}");
         window.Close();
         Report("review_saved_on_close", File.Exists(Path.Combine(rec.Directory, "页面.json")));
+    }
+
+    /// A record with only its original recording (no live captions ran): transcription gets a 16 kHz WAV made from it.
+    static void Audio16k(string outDir)
+    {
+        var dir = Path.Combine(outDir, "audio16k");
+        Directory.CreateDirectory(dir);
+        var original = Path.Combine(dir, "原始录音.wav");
+        using (var w = new WaveFileWriter(original, WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)))
+        {
+            var samples = new float[48000 * 2];
+            for (var i = 0; i < 48000; i++) samples[i * 2] = samples[i * 2 + 1] = (float)Math.Sin(i * 2 * Math.PI * 440 / 48000) * 0.3f;
+            w.WriteSamples(samples, 0, samples.Length);
+        }
+        var path = BoardTranscription.AudioFor(dir);
+        using var r = new WaveFileReader(path);
+        Report("audio_16k", path.EndsWith("full-16k.wav") && r.WaveFormat.SampleRate == 16000 && r.WaveFormat.Channels == 1 && r.WaveFormat.BitsPerSample == 16
+               && Math.Abs(r.TotalTime.TotalSeconds - 1) < 0.05, $"{r.WaveFormat} {r.TotalTime.TotalSeconds:0.00}s");
     }
 
     static void Microphone()

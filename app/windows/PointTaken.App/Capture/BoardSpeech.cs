@@ -14,11 +14,24 @@ public static class BoardTranscription
     public static string Selected => Config.Shared.GetString("record.board.transcriptionModel") is { Length: > 0 } m && m != "board-apple-speech" ? m : DefaultModel;
     public static void Select(string id) => Config.Shared.Set("record.board.transcriptionModel", id);
 
-    /// The 16 kHz WAV of a record when there is one (no ffmpeg needed), else the original.
+    /// The record's audio as a 16 kHz mono 16-bit WAV, which the scripts read without ffmpeg: the one the live
+    /// captions left, else made from their PCM (a quit cut them short), else resampled from the original recording
+    /// (no captions ran). The original itself is never changed.
     public static string AudioFor(string directory)
     {
-        var fast = Path.Combine(directory, "实时语音", "full-16k.wav");
-        return File.Exists(fast) && new FileInfo(fast).Length > 44 ? fast : Path.Combine(directory, "原始录音.wav");
+        var live = Path.Combine(directory, "实时语音");
+        var fast = Path.Combine(live, "full-16k.wav");
+        if (File.Exists(fast) && new FileInfo(fast).Length > 44) return fast;
+        var original = Path.Combine(directory, "原始录音.wav");
+        try
+        {
+            Directory.CreateDirectory(live);
+            var pcm = Path.Combine(live, "audio.pcm");
+            if (File.Exists(pcm) && new FileInfo(pcm).Length > 0 && BoardAudio.WrapPcmAsWav(pcm, fast)) return fast;
+            if (File.Exists(original) && BoardAudio.Resample16k(original, fast)) return fast;
+        }
+        catch { /* fall back to the original */ }
+        return original;
     }
 
     /// The whole recording through `model` (History's 重新转写; the fallback final pass).
@@ -28,7 +41,8 @@ public static class BoardTranscription
         BoardModelStatus.WriteReceipt(original, "requested", model);
         try
         {
-            var o = await ScriptRunner.CallAsync("transcribe.py", new[] { "note", AudioFor(directory), "--model-id", model, "--segments", "--no-download" },
+            var audio = await Task.Run(() => AudioFor(directory), cancel);
+            var o = await ScriptRunner.CallAsync("transcribe.py", new[] { "note", audio, "--model-id", model, "--segments", "--no-download" },
                                                  TimeSpan.FromSeconds(590), cancel);
             if (Json.String(o["model"]) != model || Json.String(o["text"]) is not { } text || o["segments"] is not JsonArray rows || Json.Bool(o["looped"]) == true)
             {

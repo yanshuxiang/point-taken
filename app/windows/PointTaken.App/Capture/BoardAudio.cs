@@ -25,6 +25,10 @@ public sealed class BoardAudio : IDisposable
     long framesWritten;
     readonly object lockObj = new();
     bool warned;
+    readonly ManualResetEventSlim stopped = new(false);
+    volatile bool stopping;
+    bool started;
+    bool dropWarned;
     public bool ArchiveIncomplete { get; private set; }
 
     public bool Running => capture?.CaptureState == CaptureState.Capturing;
@@ -53,20 +57,25 @@ public sealed class BoardAudio : IDisposable
         worker.Start();
         capture.DataAvailable += (_, e) =>
         {
-            if (paused || e.BytesRecorded == 0) return;
+            if (paused || e.BytesRecorded == 0 || queue.IsAddingCompleted) return;
             var copy = new byte[e.BytesRecorded];
             Buffer.BlockCopy(e.Buffer, 0, copy, 0, e.BytesRecorded);
-            if (!queue.TryAdd(copy))
+            bool added;
+            try { added = queue.TryAdd(copy); } catch (InvalidOperationException) { return; }   // closed meanwhile: the stop owns the end
+            if (!added)
             {
                 ArchiveIncomplete = true;
-                OnFailure?.Invoke("音频保存跟不上麦克风，录音可能不完整；已接收的录音和实时文字会保留。");
+                if (!dropWarned) { dropWarned = true; OnFailure?.Invoke("音频保存跟不上麦克风，录音可能不完整；已接收的录音和实时文字会保留。"); }
             }
         };
         capture.RecordingStopped += (_, e) =>
         {
-            if (e.Exception != null) OnFailure?.Invoke("麦克风中断：" + e.Exception.Message);
+            stopped.Set();
+            // a stop we asked for is not an interruption
+            if (e.Exception != null && !stopping) OnFailure?.Invoke("麦克风中断：" + e.Exception.Message);
         };
         capture.StartRecording();
+        started = true;
     }
 
     public void SetPaused(bool value) => paused = value;
@@ -164,9 +173,11 @@ public sealed class BoardAudio : IDisposable
     /// Stops the microphone, writes what is queued, closes both files. Returns when everything is on disk.
     public void Stop()
     {
-        try { capture?.StopRecording(); } catch { }
-        // let the last buffers arrive
-        Thread.Sleep(80);
+        stopping = true;
+        if (!started) stopped.Set();
+        try { capture?.StopRecording(); } catch { stopped.Set(); }
+        // the last buffers arrive before RecordingStopped; only then is the queue closed
+        stopped.Wait(TimeSpan.FromSeconds(3));
         queue.CompleteAdding();
         worker?.Join(TimeSpan.FromSeconds(10));
         lock (lockObj)
@@ -180,6 +191,30 @@ public sealed class BoardAudio : IDisposable
     }
 
     public void Dispose() { if (capture != null) Stop(); }
+
+    /// The original recording as a 16 kHz mono 16-bit WAV (written next to it first, then moved into place).
+    public static bool Resample16k(string source, string wavPath)
+    {
+        var tmp = wavPath + ".tmp";
+        try
+        {
+            using (var reader = new WaveFileReader(source))
+            {
+                var samples = reader.ToSampleProvider();
+                ISampleProvider mono = samples.WaveFormat.Channels switch
+                {
+                    1 => samples,
+                    2 => new NAudio.Wave.SampleProviders.StereoToMonoSampleProvider(samples),
+                    _ => new NAudio.Wave.SampleProviders.MultiplexingSampleProvider(new[] { samples }, 1),
+                };
+                var resampled = new NAudio.Wave.SampleProviders.WdlResamplingSampleProvider(mono, 16000);
+                WaveFileWriter.CreateWaveFile16(tmp, resampled);
+            }
+            File.Move(tmp, wavPath, overwrite: true);
+            return true;
+        }
+        catch { try { File.Delete(tmp); } catch { } return false; }
+    }
 
     /// A 16 kHz mono 16-bit WAV of the raw PCM (the final pass reads it without ffmpeg).
     public static bool WrapPcmAsWav(string pcmPath, string wavPath)
