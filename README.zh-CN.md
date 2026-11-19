@@ -6,14 +6,15 @@
 
 [![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)](app/macos/Package.swift)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](#系统要求)
-[![Windows](https://img.shields.io/badge/Windows-即将到来-0078D4)](#)
+[![Windows](https://img.shields.io/badge/Windows-10%2B%20(测试版)-0078D4)](#下载和安装)
+[![CI](https://github.com/yanshuxiang/point-taken/actions/workflows/ci.yml/badge.svg)](https://github.com/yanshuxiang/point-taken/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](scripts/.python-version)
 [![sherpa-onnx](https://img.shields.io/badge/sherpa--onnx-1.13-6E40C9)](https://github.com/k2-fsa/sherpa-onnx)
 [![License](https://img.shields.io/badge/License-GPL--3.0-13C26B)](LICENSE)
 
 **一边说、一边在屏幕上圈圈画画，就能把你的意思讲清楚。**
 
-🍎 **macOS 版已发布** —— [下载最新版本](https://github.com/yanshuxiang/point-taken/releases/latest) · 🪟 **Windows 版正在测试，即将到来**
+🍎 **macOS 版已发布** —— [下载最新版本](https://github.com/yanshuxiang/point-taken/releases/latest) · 🪟 **Windows 版测试中** —— [下载预发布版本](https://github.com/yanshuxiang/point-taken/releases)
 
 [English](README.md) | 中文
 
@@ -60,6 +61,10 @@
 <tr>
 <td width="180" align="center"><a href="https://space.bilibili.com/695032460"><img src="assets/sponsors/xinyuan-zaizhe.svg" alt="心远在这" width="160"></a></td>
 <td>感谢 心远在这 赞助本项目！<a href="https://space.bilibili.com/695032460">心远在这</a> 是 B 站教育区 UP 主，把大学理工科课程做成直观的动画：高数、线代、模电、工程电磁学，还有 RoboMaster 视觉和 ROS 2 入门。想把难懂的课轻松看懂，欢迎去 <a href="https://space.bilibili.com/695032460">B 站主页</a> 关注。</td>
+</tr>
+<tr>
+<td width="180" align="center"><a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/"><img src="assets/sponsors/nawal-al-hadrani.svg" alt="Nawal Al Hadrani" width="160"></a></td>
+<td>感谢 Nawal Al Hadrani 赞助本项目！<a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/">Nawal Al Hadrani</a> 是瑞典哥德堡的 AI Agent 开发者，正在打造一个替企业预约会议的 AI 助手。欢迎去 <a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/">领英主页</a> 关注。</td>
 </tr>
 </table>
 
@@ -130,13 +135,30 @@
 
 语音检测用的是 [Silero VAD](https://github.com/snakers4/silero-vad)，模型随仓库放在 `models/` 里，第一次录音不用额外下载。
 
+## 下载和安装
+
+所有版本都在 [Releases 页面](https://github.com/yanshuxiang/point-taken/releases)，由 GitHub Actions 从打了标签的提交自动构建。标着 *Pre-release*（版本号带 `-beta.N`）的是测试版。
+
+| 平台 | 文件 | 安装方法 |
+| --- | --- | --- |
+| macOS 13 及以上，Apple 芯片 | `PointTaken-<版本>-macos-arm64.dmg` | 打开后把「Point Taken」拖进「应用程序」。 |
+| Windows 10 2004 及以上，x64 | `PointTaken-<版本>-windows-x64-setup.exe` | 双击运行。装到当前用户，不需要管理员权限。 |
+| Windows 免安装版 | `PointTaken-<版本>-windows-x64.zip` | 解压到任意位置，运行 `PointTaken.exe`。 |
+
+- **macOS 第一次打开**：还没公证的版本会被系统拦下，到「系统设置 → 隐私与安全性」点「仍要打开」。之后 App 会请求屏幕录制、麦克风和辅助功能权限。
+- **Windows 第一次打开**：如果 SmartScreen 提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」（还没有受信任签名的版本会这样）。
+- 语音转写需要 [uv](https://docs.astral.sh/uv/)，没装的话 App 会提示帮你装。
+- **校验下载的文件**：每个文件旁边都有 `.sha256`（macOS 上 `shasum -a 256 -c <文件>.sha256`），还有构建来源证明：`gh attestation verify <文件> -R yanshuxiang/point-taken`。
+
+每个版本改了什么：[CHANGELOG.md](CHANGELOG.md)。
+
 ## 系统要求
 
-- macOS 13 或更新版本（在 macOS 26 上会使用新的液态玻璃外观）
-- 编译需要 Xcode（用的是 Xcode 自带的工具链，系统自带的命令行工具太旧，编不过）
+- macOS 13 或更新版本（在 macOS 26 上会使用新的液态玻璃外观），或 Windows 10 2004 及以上（x64）
+- 编译：macOS 上需要 Xcode（用的是 Xcode 自带的工具链，系统自带的命令行工具太旧，编不过）；Windows 上需要 .NET 8 SDK
 - 运行时语音脚本需要 [uv](https://docs.astral.sh/uv/)。如果 `PATH` 里没有，App 会提示帮你装到 `~/.point-taken/bin`。
 
-## 编译和安装
+## 从源码编译
 
 ```bash
 ./build.sh
@@ -149,6 +171,14 @@
 ```bash
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer ./build.sh
 ```
+
+Windows（PowerShell，详见 [app/windows/README.md](app/windows/README.md)）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File app\windows\build.ps1 -Run
+```
+
+正式发布由 CI 完成，不在本机打包：改 [`VERSION`](VERSION)，把 [CHANGELOG.md](CHANGELOG.md) 里 Unreleased 的内容移到新版本下，合并后推送标签 `v<版本>`。完整步骤见 [docs/发布与命名规则.md](docs/发布与命名规则.md)。
 
 ## 数据存放在哪里
 
@@ -172,6 +202,10 @@ app/macos/              App 的 Swift 包（SwiftPM）
   Sources/PointTakenObjC  接住 AVFoundation 抛出的 Objective-C 异常
   Tests/                  PointTakenCore 的 Swift 单元测试
   build-app.sh            打包 .app 并安装
+  build-dmg.sh            打出发布用的 .dmg，有凭据时签名并公证
+app/windows/            Windows 版（C# / WPF，.NET 8）；build.ps1 打 zip 和安装程序
+VERSION                 两个平台共用的版本号（所有构建都读它）
+.github/workflows/      CI（每个 PR）和 Release（推送 v* 标签时）
 scripts/                App 通过 uv 调用的 Python 脚本
   transcribe.py           带时间戳的语音转写（先做语音检测，再交给选定的模型）
   board_live.py           标注过程中的实时字幕

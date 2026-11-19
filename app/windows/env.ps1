@@ -3,7 +3,8 @@
 # DOTNET_ROOT may already point at an SDK; else the one in D:\tools\dotnet is used when it exists.
 if (-not $env:DOTNET_ROOT -and (Test-Path 'D:\tools\dotnet\dotnet.exe')) { $env:DOTNET_ROOT = 'D:\tools\dotnet' }
 if ($env:DOTNET_ROOT) { $env:PATH = "$env:DOTNET_ROOT;$env:PATH" }
-if (Test-Path 'D:\') {
+# On CI (GitHub Actions sets CI=true) the runner's own caches and temp folder are left alone.
+if (-not $env:CI -and (Test-Path 'D:\')) {
     if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = 'D:\AI-cache\nuget' }
     if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = 'D:\AI-cache\dotnet-home' }
     $env:TEMP = 'D:\AI-cache\tmp'; $env:TMP = 'D:\AI-cache\tmp'

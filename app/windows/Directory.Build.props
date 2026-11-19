@@ -1,0 +1,13 @@
+<Project>
+  <!-- One version for both apps: the repository's VERSION file (docs/发布与命名规则.md), e.g. 0.2.0-beta.2.
+       Version = all of it (the exe's product version); the SDK derives AssemblyVersion / FileVersion from its numeric
+       part. FileVersion's fourth number is the build number when POINT_TAKEN_BUILD_NUMBER is set (CI). -->
+  <PropertyGroup>
+    <PointTakenVersionFile>$(MSBuildThisFileDirectory)..\..\VERSION</PointTakenVersionFile>
+    <Version>$([System.IO.File]::ReadAllText('$(PointTakenVersionFile)').Trim())</Version>
+    <PointTakenVersionCore>$(Version.Split('-')[0])</PointTakenVersionCore>
+    <FileVersion Condition="'$(POINT_TAKEN_BUILD_NUMBER)' != ''">$(PointTakenVersionCore).$(POINT_TAKEN_BUILD_NUMBER)</FileVersion>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>

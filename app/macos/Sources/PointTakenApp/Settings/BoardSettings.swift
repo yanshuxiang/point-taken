@@ -31,8 +31,11 @@ final class BoardGeneralModel: ObservableObject {
         language = v
     }
 
+    /// The full release version from the repository's VERSION file (0.2.0-beta.2): build-app.sh writes it to
+    /// PointTakenVersion, since CFBundleShortVersionString may only hold the numeric part (0.2.0).
     static var version: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let info = Bundle.main.infoDictionary
+        let v = info?["PointTakenVersion"] as? String ?? info?["CFBundleShortVersionString"] as? String ?? ""
         return v.isEmpty ? "—" : v
     }
 }

@@ -38,8 +38,11 @@
 	<string>Point Taken</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- build-app.sh fills in the versions from the repository's VERSION file: CFBundleShortVersionString = its
+	     numeric part (0.2.0), CFBundleVersion = the build number (commit count), PointTakenVersion = all of it
+	     (0.2.0-beta.2). Don't edit them here. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.1</string>
+	<string>0.0.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -54,7 +57,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>0.1.1</string>
+	<string>0</string>
 	<key>LSHasLocalizedDisplayName</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>
