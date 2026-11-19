@@ -4,7 +4,7 @@ Windows 版用 C# / WPF（.NET 8）重写了 macOS 版的界面和系统交互�
 
 ## 用法
 
-1. 解压 `PointTaken-<版本>-windows-x64.zip`，运行 `PointTaken.exe`。启动后只在任务栏右下角的通知区域出现图标。
+1. 运行 `PointTaken-<版本>-windows-x64-setup.exe` 安装（装到当前用户，不需要管理员权限）；或者解压免安装的 `PointTaken-<版本>-windows-x64.zip`，运行 `PointTaken.exe`。启动后只在任务栏右下角的通知区域出现图标。
 2. 第一次用：右键图标 → 设置 → 模型与 API，下载 **SenseVoice Small**（约 230 MB，本机识别，不上传录音）。也可以填豆包、阿里云百炼或 OpenAI 兼容服务的密钥，改用云端模型。
 3. 按 <kbd>Alt</kbd>+<kbd>N</kbd> 开始。屏幕顶部出现胶囊：绿点表示在录音，旁边是你刚说的话。
 4. 点胶囊上的画笔（自由画 / 矩形 / 圆圈）画一笔，或者按住 <kbd>Ctrl</kbd> 画、按住 <kbd>Ctrl</kbd>+<kbd>Shift</kbd> 画矩形；松开就回到正常点击，可以继续操作、翻页、滚动。
@@ -21,8 +21,10 @@ Windows 版用 C# / WPF（.NET 8）重写了 macOS 版的界面和系统交互�
 
 ## 开发
 
+版本号来自仓库根目录的 `VERSION`（`Directory.Build.props` 读它），不要在 csproj 里写 `<Version>`。安装程序的脚本在 `installer/PointTaken.iss`（Inno Setup 6）。
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File app\windows\build.ps1        # 测试 + 打包 dist\PointTaken-<版本>-windows-x64.zip
+powershell -ExecutionPolicy Bypass -File app\windows\build.ps1        # 测试 + 打包 dist\ 下的 zip 和 setup.exe（-NoInstaller 不打安装程序，-Sign <指纹> 签名）
 dotnet test app\windows\PointTaken.Core.Tests                        # 只跑单元测试
 dist\PointTaken-<版本>-windows-x64\PointTaken.exe --self-check <目录>   # 截图排除、记录文件、界面渲染、麦克风自检
 dist\...\PointTaken.exe --live-probe <wav> <目录>                       # 用所选模型跑一遍实时字幕和整段转写

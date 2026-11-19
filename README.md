@@ -6,14 +6,15 @@
 
 [![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)](app/macos/Package.swift)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](#requirements)
-[![Windows](https://img.shields.io/badge/Windows-coming%20soon-0078D4)](#)
+[![Windows](https://img.shields.io/badge/Windows-10%2B%20(beta)-0078D4)](#download-and-install)
+[![CI](https://github.com/yanshuxiang/point-taken/actions/workflows/ci.yml/badge.svg)](https://github.com/yanshuxiang/point-taken/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](scripts/.python-version)
 [![sherpa-onnx](https://img.shields.io/badge/sherpa--onnx-1.13-6E40C9)](https://github.com/k2-fsa/sherpa-onnx)
 [![License](https://img.shields.io/badge/License-GPL--3.0-13C26B)](LICENSE)
 
 **Talk while you mark up your screen, and get your point across.**
 
-🍎 **macOS: available now** — [download the latest release](https://github.com/yanshuxiang/point-taken/releases/latest) · 🪟 **Windows: in testing, coming soon**
+🍎 **macOS: available now** — [download the latest release](https://github.com/yanshuxiang/point-taken/releases/latest) · 🪟 **Windows: beta** — [download a pre-release](https://github.com/yanshuxiang/point-taken/releases)
 
 English | [中文](README.zh-CN.md)
 
@@ -134,13 +135,30 @@ Pick a speech service under **Settings → Models & API**.
 
 Voice activity detection uses [Silero VAD](https://github.com/snakers4/silero-vad), which ships in `models/` so the first recording needs no download.
 
+## Download and install
+
+Every release is on the [Releases page](https://github.com/yanshuxiang/point-taken/releases), built by GitHub Actions from the tagged commit. Versions marked *Pre-release* (`-beta.N`) are test builds.
+
+| Platform | File | How |
+| --- | --- | --- |
+| macOS 13+, Apple silicon | `PointTaken-<version>-macos-arm64.dmg` | Open it and drag **Point Taken** into Applications. |
+| Windows 10 2004+, x64 | `PointTaken-<version>-windows-x64-setup.exe` | Run it. Installs for the current user, no administrator rights needed. |
+| Windows, portable | `PointTaken-<version>-windows-x64.zip` | Unzip anywhere and run `PointTaken.exe`. |
+
+- **First launch on macOS**: builds that are not notarized yet are blocked by Gatekeeper. Open System Settings → Privacy & Security and click **Open Anyway**. The app then asks for Screen Recording, Microphone and Accessibility access.
+- **First launch on Windows**: if SmartScreen says "Windows protected your PC", click **More info → Run anyway** (shown for builds without a trusted signature).
+- Speech needs [uv](https://docs.astral.sh/uv/); the app offers to install it if it's missing.
+- **Verify a download**: each file has a `.sha256` next to it (`shasum -a 256 -c <file>.sha256` on macOS), and a build provenance attestation: `gh attestation verify <file> -R yanshuxiang/point-taken`.
+
+Changes in each version: [CHANGELOG.md](CHANGELOG.md).
+
 ## Requirements
 
-- macOS 13 or later (macOS 26 gets the Liquid Glass look)
-- Xcode to build (the build uses Xcode's toolchain; the stock Command Line Tools are too old)
+- macOS 13 or later (macOS 26 gets the Liquid Glass look), or Windows 10 version 2004 or later (x64)
+- To build: Xcode on macOS (the build uses Xcode's toolchain; the stock Command Line Tools are too old); the .NET 8 SDK on Windows
 - [uv](https://docs.astral.sh/uv/) at runtime for the speech scripts. If it isn't on your `PATH`, the app offers to install it into `~/.point-taken/bin`.
 
-## Build and install
+## Build from source
 
 ```bash
 ./build.sh
@@ -153,6 +171,14 @@ To use a different Xcode, set `DEVELOPER_DIR` first:
 ```bash
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer ./build.sh
 ```
+
+Windows (PowerShell; see [app/windows/README.md](app/windows/README.md)):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File app\windows\build.ps1 -Run
+```
+
+Releases are built by CI, not by hand: bump [`VERSION`](VERSION), move the notes in [CHANGELOG.md](CHANGELOG.md) under the new version, merge, then push the tag `v<version>`. The full steps are in [docs/发布与命名规则.md](docs/发布与命名规则.md).
 
 ## Where your data lives
 
@@ -176,6 +202,10 @@ app/macos/              Swift package (SwiftPM) for the app
   Sources/PointTakenObjC  Catches Objective-C exceptions from AVFoundation
   Tests/                  Swift unit tests for PointTakenCore
   build-app.sh            Builds the .app bundle and installs it
+  build-dmg.sh            Builds, signs and (with credentials) notarizes the release .dmg
+app/windows/            Windows app (C# / WPF, .NET 8); build.ps1 builds the zip and the installer
+VERSION                 The version of both apps (read by every build)
+.github/workflows/      CI (every PR) and Release (on a v* tag)
 scripts/                Python scripts the app runs through uv
   transcribe.py           Speech-to-text with timestamps (VAD first, then the chosen model)
   board_live.py           Live captions for a marking session

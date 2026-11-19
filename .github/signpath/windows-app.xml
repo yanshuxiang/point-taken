@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "windows-app" (.github/workflows/release.yml): the GitHub artifact is the published
+     app folder; sign the app's own executables. The .NET runtime's files keep Microsoft's signatures.
+     Paste this into SignPath → project → Artifact configurations, slug windows-app. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="PointTaken.exe" />
+      <include path="PointTaken.dll" />
+      <include path="PointTaken.Core.dll" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>
