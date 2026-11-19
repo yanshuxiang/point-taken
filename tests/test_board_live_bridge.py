@@ -1,15 +1,18 @@
 """Replay the actual Swift caption-event receiver, without starting ASR or using a microphone."""
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+SWIFTC = shutil.which('swiftc')     # macOS: Xcode's (/usr/bin/swiftc); the Linux runners have a Swift toolchain too
 
 
+@unittest.skipUnless(SWIFTC, 'needs the Swift compiler (swiftc)')
 class LiveBridgeTest(unittest.TestCase):
     def test_file_result_stays_separate_from_live_text_and_rejects_incomplete_results(self):
-        source = (ROOT / 'app/macos/Sources/PointTakenApp/Capture/BoardLiveSpeech.swift').read_text()
+        source = (ROOT / 'app/macos/Sources/PointTakenApp/Capture/BoardLiveSpeech.swift').read_text(encoding="utf-8")
         methods = source[source.index('    private func receive('):source.index('\n}\n\n/// Buffer format')]
         harness = r'''
 import Foundation
@@ -66,11 +69,11 @@ print("PASS: live/file transcript handoff, timestamps, failure and loop rejectio
         with tempfile.TemporaryDirectory(prefix='point-taken-live-bridge-') as temporary:
             directory = Path(temporary)
             swift = directory / 'main.swift'
-            swift.write_text(harness + methods + checks)
+            swift.write_text(harness + methods + checks, encoding="utf-8")
             binary = directory / 'check'
-            compiled = subprocess.run(['xcrun', 'swiftc', str(swift), '-o', str(binary)], capture_output=True, text=True)
+            compiled = subprocess.run([SWIFTC, str(swift), '-o', str(binary)], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            result = subprocess.run([str(binary)], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stderr)
 
 

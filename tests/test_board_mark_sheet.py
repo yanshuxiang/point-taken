@@ -78,13 +78,15 @@ class BoardMarkSheetTests(unittest.TestCase):
     def test_marks_keep_their_numbers_and_notes(self):
         with tempfile.TemporaryDirectory(prefix='point-taken-mark-sheet-test-') as path:
             directory = Path(path)
-            (directory / 'main.swift').write_text(HARNESS)
-            command = ['xcrun', 'swiftc'] + [str(CORE / name) for name in ['BoardEvidence.swift', 'BoardMarkSheet.swift']]
+            (directory / 'main.swift').write_text(HARNESS, encoding="utf-8")
+            # BoardScrollProof.swift: BoardInput, which BoardEvidence.swift keeps
+            command = ['xcrun', 'swiftc'] + [str(CORE / name) for name in
+                       ['BoardEvidence.swift', 'BoardScrollProof.swift', 'BoardMarkSheet.swift']]
             command += [str(directory / 'main.swift'), '-o', str(directory / 'check')]
             result = subprocess.run(command, env=dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer'),
-                                    capture_output=True, text=True, timeout=90)
+                                    capture_output=True, text=True, encoding="utf-8", timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run([str(directory / 'check')], capture_output=True, text=True, timeout=20)
+            result = subprocess.run([str(directory / 'check')], capture_output=True, text=True, encoding="utf-8", timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('PASS:', result.stdout)
 

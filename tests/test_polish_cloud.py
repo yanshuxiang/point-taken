@@ -144,7 +144,7 @@ def test_a_model_the_service_doesnt_know_says_so(api):
 def test_the_curated_list_is_one_file_in_the_bundle_and_repository():
     # PointTakenCore reads the bundled schema-1 list; refreshes fetch this same repository file.
     skill = ROOT / "scripts" / "curated_models.json"
-    source = (ROOT / "app/macos/Sources/PointTakenApp/App/CuratedModels.swift").read_text()
+    source = (ROOT / "app/macos/Sources/PointTakenApp/App/CuratedModels.swift").read_text(encoding="utf-8")
     url = re.search(r'static let url = URL\(string: "([^"]+)"\)', source)
     assert url and url[1] == "https://raw.githubusercontent.com/yanshuxiang/point-taken/main/" + skill.relative_to(ROOT).as_posix()
     d = json.loads(skill.read_text(encoding="utf-8"))

@@ -232,7 +232,7 @@ def main():
         res["e2e"] = e2e
         print(json.dumps(e2e, indent=1))
     if a.json:
-        Path(a.json).write_text(json.dumps(res, indent=1))
+        Path(a.json).write_text(json.dumps(res, indent=1), encoding="utf-8")
 
 
 def _write(path: Path, x: np.ndarray) -> None:

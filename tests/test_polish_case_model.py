@@ -38,7 +38,7 @@ class SentenceCaseWithTheModel(unittest.TestCase):
     def run_polish(self, before: str, text: str) -> dict:
         env = {**os.environ, "POINT_TAKEN_HOME": str(self.home)}
         p = subprocess.run(["uv", "run", "-q", str(SCRIPT), "run", "--no-server", "--no-vocab", "--model", IDS[MODEL.name],
-                            "--before", before, "--text", text], env=env, capture_output=True, text=True, timeout=600)
+                            "--before", before, "--text", text], env=env, capture_output=True, text=True, encoding="utf-8", timeout=600)
         self.assertEqual(p.returncode, 0, p.stderr[-800:])
         return json.loads(p.stdout)
 

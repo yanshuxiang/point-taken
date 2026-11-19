@@ -47,7 +47,7 @@ class LiveSpeechTest(unittest.TestCase):
    self.assertTrue(all(e.get('model')=='volcengine-seedasr' for e in events))
    self.assertEqual(backend.asserted['url'],L.T.VOLC_LIVE_URL)
  def test_configured_nonapple_never_requests_apple_permission(self):
-  source=(ROOT/'app/macos/Sources/PointTakenApp/Capture/Board.swift').read_text()
+  source=(ROOT/'app/macos/Sources/PointTakenApp/Capture/Board.swift').read_text(encoding="utf-8")
   start=source[source.index('    func start(locale: String, directory: URL)'):source.index('    private func beginAudio()')]
   self.assertIn('self.finalModel == BoardTranscription.apple',start)
   self.assertLess(start.index('self.finalModel == BoardTranscription.apple'),start.index('SFSpeechRecognizer.requestAuthorization'))

@@ -24,6 +24,8 @@ import polish  # noqa: E402
 
 
 class TranslateCLI(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "the stand-in for uv is a shell script (and MLX, which the re-run brings, is "
+                                      "Apple Silicon only)")
     def test_the_rerun_gets_the_payload_already_read(self):
         with tempfile.TemporaryDirectory() as d:
             uv = Path(d) / "uv"
