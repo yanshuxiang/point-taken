@@ -61,6 +61,10 @@
 <td width="180" align="center"><a href="https://space.bilibili.com/695032460"><img src="assets/sponsors/xinyuan-zaizhe.svg" alt="心远在这" width="160"></a></td>
 <td>感谢 心远在这 赞助本项目！<a href="https://space.bilibili.com/695032460">心远在这</a> 是 B 站教育区 UP 主，把大学理工科课程做成直观的动画：高数、线代、模电、工程电磁学，还有 RoboMaster 视觉和 ROS 2 入门。想把难懂的课轻松看懂，欢迎去 <a href="https://space.bilibili.com/695032460">B 站主页</a> 关注。</td>
 </tr>
+<tr>
+<td width="180" align="center"><a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/"><img src="assets/sponsors/nawal-al-hadrani.svg" alt="Nawal Al Hadrani" width="160"></a></td>
+<td>感谢 Nawal Al Hadrani 赞助本项目！<a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/">Nawal Al Hadrani</a> 是瑞典哥德堡的 AI Agent 开发者，正在打造一个替企业预约会议的 AI 助手。欢迎去 <a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/">领英主页</a> 关注。</td>
+</tr>
 </table>
 
 </details>

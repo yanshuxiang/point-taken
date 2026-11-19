@@ -61,6 +61,10 @@ Point Taken is a macOS menu bar tool. Hold a shortcut, draw on your screen, and 
 <td width="180" align="center"><a href="https://space.bilibili.com/695032460"><img src="assets/sponsors/xinyuan-zaizhe.svg" alt="心远在这" width="160"></a></td>
 <td>Thanks to 心远在这 for sponsoring this project! <a href="https://space.bilibili.com/695032460">心远在这</a> is a Bilibili creator who turns university STEM courses into clear animations: calculus, linear algebra, analog electronics, electromagnetics, RoboMaster vision and ROS 2. Follow on <a href="https://space.bilibili.com/695032460">Bilibili</a> to learn the hard parts the easy way.</td>
 </tr>
+<tr>
+<td width="180" align="center"><a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/"><img src="assets/sponsors/nawal-al-hadrani.svg" alt="Nawal Al Hadrani" width="160"></a></td>
+<td>Thanks to Nawal Al Hadrani for sponsoring this project! <a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/">Nawal Al Hadrani</a> is an AI agent developer in Gothenburg, Sweden, building an AI agent that books meetings for companies. Connect on <a href="https://www.linkedin.com/in/nawal-al-hadrani-014779262/">LinkedIn</a>.</td>
+</tr>
 </table>
 
 </details>
