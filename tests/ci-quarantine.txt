@@ -9,5 +9,7 @@
 
 # a real bug the test caught, not fixed here (app code): on Windows apply_priority() passes GetCurrentProcess()'s
 # pseudo-handle through ctypes without restype / argtypes, SetPriorityClass gets a truncated handle and fails
-# (ERROR_INVALID_HANDLE): batch transcription runs at normal priority there
+# (ERROR_INVALID_HANDLE): batch transcription runs at normal priority there, and a dictation or voice note started
+# from a below-normal process (the CI runner) stays below normal
 windows tests/test_asr_select.py::Limits::test_batch_priority_reaches_every_thread
+windows tests/test_asr_select.py::Limits::test_interactive_purposes_keep_normal_priority
