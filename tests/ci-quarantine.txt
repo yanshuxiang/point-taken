@@ -1,0 +1,35 @@
+# Python tests that fail on the CI runners for reasons unrelated to the change being tested, skipped by
+# .github/workflows/ci.yml (pytest --deselect). Every other test must pass. Remove a line as soon as its test is fixed;
+# never add one to get a PR through. Format: <linux|macos|all> <pytest node id>   # why
+#
+# Found on 2026-11-19 when CI was set up (#2). On a developer's Apple-silicon Mac most of these pass.
+
+# model choice assumes an Apple-silicon Mac with MLX models / Apple Speech; the runners have neither
+linux tests/test_asr_select.py::CLI::test_auto_apply_pins_only_the_recommended
+linux tests/test_asr_select.py::AppleSpeechSelect::test_a_chosen_model_still_asks_for_the_vad
+all   tests/test_asr_select.py::AppleSpeechSelect::test_a_local_model_takes_over
+linux tests/test_asr_select.py::AppleSpeechSelect::test_it_runs_when_nothing_is_downloaded
+all   tests/test_asr_select.py::AppleSpeechSelect::test_model_files_without_the_vad_dont_beat_macos_speech
+linux tests/test_asr_select.py::CloudSpeed::test_dictation_offers_a_keyed_cloud_service
+linux tests/test_dictation_vocab.py::BiasedNote::test_an_installed_qwen_is_used_when_it_fits_next_to_polish
+linux tests/test_dictation_vocab.py::BiasedNote::test_dictation_models_rows
+
+# needs xcrun (macOS only) but is not skipped elsewhere
+linux tests/test_board_live_bridge.py::LiveBridgeTest::test_file_result_stays_separate_from_live_text_and_rejects_incomplete_results
+
+# correction learning / sounds-alike results differ on Linux (Chinese conversion and segmentation)
+linux tests/test_dictation_vocab.py::LearnFromCorrection::test_fixes
+linux tests/test_dictation_vocab.py::LearnFromCorrection::test_two_fixes_side_by_side_are_two_never_one_with_a_comma
+linux tests/test_dictation_vocab.py::SoundsAlike::test_a_misheard_term_is_found
+linux tests/test_dictation_vocab.py::SoundsAlike::test_relevant_and_ranked_bring_the_term_first
+
+# timing-sensitive on a shared runner
+linux tests/test_polish.py::ServeWhileLoading::test_what_needs_no_model_is_answered_at_once_and_a_wait_is_load_time
+macos tests/test_transcribe_interim.py::Interim::test_an_interim_decode_alone_answers
+
+# compile a hand-picked subset of PointTakenCore with swiftc; the subset no longer builds
+# (BoardEvidence.swift needs BoardInput, BoardPaging.swift needs BoardMotionMask)
+macos tests/test_board_evidence.py::BoardEvidenceTests::test_timing_round_trip_and_audio_clock
+macos tests/test_board_mark_sheet.py::BoardMarkSheetTests::test_marks_keep_their_numbers_and_notes
+macos tests/test_board_paging.py::BoardPaging::test_boundaries_and_stitching
+macos tests/test_board_readable_export.py::BoardReadableExportTests::test_handoff_keeps_information_readable

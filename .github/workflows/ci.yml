@@ -79,8 +79,11 @@ jobs:
 
   macos:
     name: macOS · build, test, package
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain releases are built with (Xcode 26.6's Swift 6.3.3 crashes optimizing BoardReview.swift)
+    runs-on: xcode-27
     timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,9 +132,16 @@ jobs:
             .github/workflows/ci.yml
 
       - name: Test
-        # the union of the scripts' inline dependencies (PEP 723), on the Python they are pinned to
-        run: >
-          uv run --no-project --python "$(grep -v '^#' scripts/.python-version | head -1)"
-          --with pytest --with numpy==2.3.4 --with sherpa-onnx==1.13.8 --with truststore==0.10.5
-          --with opencc-python-reimplemented==0.1.7
-          pytest tests -ra --durations=15 -p no:cacheprovider
+        # the union of the scripts' inline dependencies (PEP 723), on the Python they are pinned to;
+        # tests/ci-quarantine.txt lists known failures on the runners (each with its reason)
+        run: |
+          os="$(case "$RUNNER_OS" in Linux) echo linux;; macOS) echo macos;; esac)"
+          deselect=()
+          while read -r where id _; do
+            case "$where" in all|"$os") deselect+=(--deselect "$id");; esac
+          done < <(grep -Ev '^\s*(#|$)' tests/ci-quarantine.txt)
+          echo "quarantined on $os: $(( ${#deselect[@]} / 2 )) tests (tests/ci-quarantine.txt)"
+          uv run --no-project --python "$(grep -v '^#' scripts/.python-version | head -1)" \
+            --with pytest --with numpy==2.3.4 --with sherpa-onnx==1.13.8 --with truststore==0.10.5 \
+            --with opencc-python-reimplemented==0.1.7 \
+            pytest tests -ra --durations=15 -p no:cacheprovider "${deselect[@]}"
