@@ -135,7 +135,8 @@ jobs:
         # the union of the scripts' inline dependencies (PEP 723), on the Python they are pinned to;
         # tests/ci-quarantine.txt lists known failures on the runners (each with its reason)
         run: |
-          os="$(case "$RUNNER_OS" in Linux) echo linux;; macOS) echo macos;; esac)"
+          # (macOS ships bash 3.2: keep this plain)
+          if [ "$RUNNER_OS" = "macOS" ]; then os=macos; else os=linux; fi
           deselect=()
           while read -r where id _; do
             case "$where" in all|"$os") deselect+=(--deselect "$id");; esac
