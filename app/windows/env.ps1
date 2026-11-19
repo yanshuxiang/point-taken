@@ -1,4 +1,4 @@
-# Dot-source before building: keeps the .NET SDK's first-run files and the NuGet cache off C:.
+﻿# Dot-source before building: keeps the .NET SDK's first-run files and the NuGet cache off C:.
 #   . app\windows\env.ps1; dotnet build app\windows\PointTaken.Windows.sln
 # DOTNET_ROOT may already point at an SDK; else the one in D:\tools\dotnet is used when it exists.
 if (-not $env:DOTNET_ROOT -and (Test-Path 'D:\tools\dotnet\dotnet.exe')) { $env:DOTNET_ROOT = 'D:\tools\dotnet' }
