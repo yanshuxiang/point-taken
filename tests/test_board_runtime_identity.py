@@ -7,7 +7,7 @@ SOURCE = ROOT / 'app/macos/Sources/PointTakenApp/Capture/BoardPaste.swift'
 @unittest.skipUnless(sys.platform == 'darwin', 'Swift compiler required')
 class RuntimeIdentityTests(unittest.TestCase):
     def test_board_reads_real_permissions_but_test_bundles_stay_simulated(self):
-        source = SOURCE.read_text()
+        source = SOURCE.read_text(encoding="utf-8")
         start = source.index('    static var testMode: Bool {')
         end = source.index('    /// clipboard managers skip', start)
         predicate = source[start:end]
@@ -35,9 +35,9 @@ print("PASS")
 '''
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            (directory/'main.swift').write_text(harness)
+            (directory/'main.swift').write_text(harness, encoding="utf-8")
             result = subprocess.run(['xcrun','swiftc',str(directory/'main.swift'),'-o',str(directory/'check')],
-                env=dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer'),capture_output=True,text=True)
+                env=dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer'),capture_output=True,text=True, encoding="utf-8")
             self.assertEqual(result.returncode,0,result.stderr)
-            result = subprocess.run([str(directory/'check')],capture_output=True,text=True)
+            result = subprocess.run([str(directory/'check')],capture_output=True,text=True, encoding="utf-8")
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)

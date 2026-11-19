@@ -23,7 +23,8 @@ SR = A.SR
 
 class Stoppable(A.FakeBackend):
     """An interim decode takes 3 s, looking at stop_check every 10 ms (as Qwen3Mlx does between tokens); a final one
-    is quick."""
+    is quick. 3 s by the clock, not 300 sleeps: on a macOS CI runner a 10 ms sleep took over 30 ms, the decode over
+    10 s, and the request timed out."""
     interruptible = True
     stop_check = None
     calls: list = []
@@ -31,7 +32,8 @@ class Stoppable(A.FakeBackend):
     def transcribe(self, x):
         Stoppable.calls.append("interim" if self.stop_check else "final")
         if self.stop_check is not None:
-            for _ in range(300):
+            end = time.monotonic() + 3
+            while time.monotonic() < end:
                 if self.stop_check():
                     raise T.Interrupted("waiting")
                 time.sleep(0.01)

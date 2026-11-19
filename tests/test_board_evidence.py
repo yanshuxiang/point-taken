@@ -58,12 +58,13 @@ class BoardEvidenceTests(unittest.TestCase):
     def test_timing_round_trip_and_audio_clock(self):
         with tempfile.TemporaryDirectory(prefix='point-taken-evidence-test-') as path:
             directory = Path(path)
-            (directory / 'main.swift').write_text(HARNESS)
-            result = subprocess.run(['xcrun', 'swiftc', str(CORE / 'BoardEvidence.swift'),
+            (directory / 'main.swift').write_text(HARNESS, encoding="utf-8")
+            # BoardEvidence.swift keeps the inputs the screen feed saw: BoardInput, from BoardScrollProof.swift
+            result = subprocess.run(['xcrun', 'swiftc', str(CORE / 'BoardEvidence.swift'), str(CORE / 'BoardScrollProof.swift'),
                                      str(CORE / 'BoardArchive.swift'), str(directory / 'main.swift'),
-                                     '-o', str(directory / 'check')], capture_output=True, text=True,
+                                     '-o', str(directory / 'check')], capture_output=True, text=True, encoding="utf-8",
                                     env=dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer'), timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run([str(directory / 'check'), str(directory)], capture_output=True, text=True, timeout=20)
+            result = subprocess.run([str(directory / 'check'), str(directory)], capture_output=True, text=True, encoding="utf-8", timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('PASS:', result.stdout)

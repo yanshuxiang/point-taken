@@ -270,12 +270,12 @@ class Enrollment(unittest.TestCase):
 
     def test_what_v1_learned_is_forgotten(self):
         # v1 learned whole cuts, a friend's reply inside one included
-        self.path.write_text(json.dumps({"model": T.VP_FILE, "embeddings": [ME.tolist()], "learned": [OTHER.tolist()]}))
+        self.path.write_text(json.dumps({"model": T.VP_FILE, "embeddings": [ME.tolist()], "learned": [OTHER.tolist()]}), encoding="utf-8")
         self.assertEqual(T.Voiceprint.status()["learned"], 0)
         self.assertAlmostEqual(float(T.Voiceprint.target() @ ME), 1.0, places=4)
 
     def test_a_profile_from_another_model_is_stale(self):
-        self.path.write_text(json.dumps({"model": "old.onnx", "embeddings": [[1.0] * 512]}))
+        self.path.write_text(json.dumps({"model": "old.onnx", "embeddings": [[1.0] * 512]}), encoding="utf-8")
         s = T.Voiceprint.status()
         self.assertEqual((s["enrolled"], s["stale"]), (False, True))
         self.assertIsNone(T.Voiceprint.target())                       # never compared across models

@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 
 
 def pinned() -> tuple[int, int]:
-    lines = [l.strip() for l in (SCRIPTS / ".python-version").read_text().splitlines()]
+    lines = [l.strip() for l in (SCRIPTS / ".python-version").read_text(encoding="utf-8").splitlines()]
     v = [l for l in lines if l and not l.startswith("#")]
     assert len(v) == 1 and re.fullmatch(r"3\.\d+", v[0]), v
     major, minor = v[0].split(".")
@@ -32,7 +35,7 @@ def version(s: str) -> tuple[int, int]:
 def test_fits_every_script():
     v = pinned()
     for f in sorted(SCRIPTS.glob("*.py")):
-        m = re.search(r'^# requires-python = "([^"]+)"', f.read_text(), re.M)
+        m = re.search(r'^# requires-python = "([^"]+)"', f.read_text(encoding="utf-8"), re.M)
         if not m:
             continue
         for spec in m.group(1).split(","):
@@ -42,10 +45,11 @@ def test_fits_every_script():
             assert ok, f"{f.name}: requires-python {m.group(1)!r} excludes {v}"
 
 
+@pytest.mark.skipif(not (shutil.which("sh") and shutil.which("rsync")), reason="the macOS build step needs sh and rsync")
 def test_ships_with_the_desktop_app():
     # The macOS bundle now owns the scripts. Run its actual resource-copy block in a temporary directory,
     # without compiling, installing or opening the app, to catch excludes that accidentally drop this dotfile.
-    build = (ROOT / "app/macos/build-app.sh").read_text()
+    build = (ROOT / "app/macos/build-app.sh").read_text(encoding="utf-8")
     copy = re.search(r"^for d in scripts models; do\n.*?^done$", build, re.M | re.S)
     assert copy, "the app's script packaging step is missing"
     with tempfile.TemporaryDirectory() as directory:
