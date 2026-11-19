@@ -111,7 +111,8 @@ if ($Stage -in 'all', 'checksum') {
     foreach ($f in @($zip, $setup)) {
         if (-not (Test-Path $f)) { continue }
         $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLowerInvariant()
-        "$hash  $(Split-Path $f -Leaf)" | Set-Content -Encoding ascii "$f.sha256"
+        # LF only: `shasum -a 256 -c` / `sha256sum -c` read a CR as part of the file name
+        [IO.File]::WriteAllText("$f.sha256", "$hash  $(Split-Path $f -Leaf)`n", [Text.Encoding]::ASCII)
         Write-Host "  $hash  $(Split-Path $f -Leaf)"
     }
 }

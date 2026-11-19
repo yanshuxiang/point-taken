@@ -76,7 +76,10 @@ def verify(directory: Path, version: str | None = None) -> list[str]:
         if not sums.exists():
             problems.append(f"{p.name}: no {sums.name}")
             continue
-        want = sums.read_text(encoding="ascii").split()
+        raw = sums.read_bytes()
+        if b"\r" in raw:
+            problems.append(f"{sums.name}: has CR line endings (`shasum -c` would read the CR as part of the name)")
+        want = raw.decode("ascii").split()
         got = hashlib.sha256(p.read_bytes()).hexdigest()
         if len(want) != 2 or want[0].lower() != got or want[1].lstrip("*") != p.name:
             problems.append(f"{sums.name}: does not match {p.name} (sha256 {got})")

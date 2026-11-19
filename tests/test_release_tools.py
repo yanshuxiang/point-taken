@@ -74,7 +74,7 @@ class Verify(unittest.TestCase):
     def _write(self, d: Path, name: str, data: bytes = b"x", sums: str | None = None):
         (d / name).write_bytes(data)
         h = hashlib.sha256(data).hexdigest()
-        (d / f"{name}.sha256").write_text(sums if sums is not None else f"{h}  {name}\n", encoding="ascii")
+        (d / f"{name}.sha256").write_bytes((sums if sums is not None else f"{h}  {name}\n").encode("ascii"))
 
     def test_good(self):
         with tempfile.TemporaryDirectory() as t:
@@ -93,6 +93,14 @@ class Verify(unittest.TestCase):
                 self._write(d, name, sums=sums)
                 with self.assertRaises(R.ReleaseError, msg=name):
                     R.verify(d, "0.2.0")
+
+    def test_crlf_checksum(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            name = "PointTaken-0.2.0-windows-x64.zip"
+            self._write(d, name, sums=f"{hashlib.sha256(b'x').hexdigest()}  {name}\r\n")
+            with self.assertRaises(R.ReleaseError):
+                R.verify(d)
 
     def test_missing_checksum(self):
         with tempfile.TemporaryDirectory() as t:
