@@ -14,7 +14,7 @@ def test_no_browser_dialogs():
     for p in [*ROOT.glob("web/apps/*/src/**/*"), *ROOT.glob("web/packages/*/src/**/*")]:
         if p.suffix not in (".ts", ".tsx") or p.name.endswith(".test.ts") or p.name.endswith(".test.tsx"):
             continue
-        for i, line in enumerate(p.read_text().splitlines(), 1):
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
             if bad.search(line.split("//", 1)[0]):
                 hits.append(f"{p.relative_to(ROOT)}:{i}: {line.strip()}")
     assert hits == []

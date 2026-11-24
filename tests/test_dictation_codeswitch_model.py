@@ -39,10 +39,10 @@ class CodeSwitchWithTheModel(unittest.TestCase):
         os.symlink(MODEL, self.home / "models" / "asr" / MODEL.name)
         os.symlink(VAD, self.home / "models" / "silero_vad.onnx")
         (self.home / "config.json").write_text(json.dumps({"record": {"dictation": {"asr_model": "qwen3-asr-1.7b-mlx"}},
-                                                           "asr": {"languages": ["zh", "en"]}}))
+                                                           "asr": {"languages": ["zh", "en"]}}), encoding="utf-8")
         (self.home / "dictation").mkdir()
         (self.home / "dictation" / "vocabulary.json").write_text(json.dumps({"schema": 2, "terms": [
-            {"term": t, "source": "default", "state": "active", "hits": len(WORDS) - i} for i, t in enumerate(WORDS)]}))
+            {"term": t, "source": "default", "state": "active", "hits": len(WORDS) - i} for i, t in enumerate(WORDS)]}), encoding="utf-8")
 
     def tearDown(self):
         shutil.rmtree(self.home, ignore_errors=True)
@@ -50,7 +50,7 @@ class CodeSwitchWithTheModel(unittest.TestCase):
     def note(self, *extra) -> dict:
         r = subprocess.run(["uv", "run", "-q", "--with", "mlx-qwen3-asr==0.4.4", str(SCRIPT), "note", str(WAV),
                             "--dictation", "--no-server", "--no-download", *extra],
-                           capture_output=True, text=True, timeout=600, env={**os.environ, "POINT_TAKEN_HOME": str(self.home)})
+                           capture_output=True, text=True, encoding="utf-8", timeout=600, env={**os.environ, "POINT_TAKEN_HOME": str(self.home)})
         lines = [ln for ln in r.stdout.splitlines() if ln.startswith("{")]
         self.assertTrue(lines, r.stderr[-2000:])
         return json.loads(lines[-1])

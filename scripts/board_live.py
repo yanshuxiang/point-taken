@@ -99,8 +99,11 @@ def stream(root: Path, model: str, backend, send, window_seconds=240):
 class CaptionEngine:
     """Reuse an existing server, or one local engine for both captions and the final original recording."""
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, language: str | None = None):
         self.model = model
+        # the language the user said they speak (the app's 识别语言); None: the model tells (a short or accented piece
+        # was taken for another language — "Okay, hi guys" came back as オケは外し)
+        self.language = language or None
         self.engine = None
         self.provider = (T.entry(model) or {}).get("backend", "local")
 
@@ -108,7 +111,7 @@ class CaptionEngine:
         result = None
         if self.engine is None:
             result = T._server_call({"cmd": "note", "wav": str(wav), "model_id": self.model,
-                                     "no_download": True, "include_segments": include_segments},
+                                     "language": self.language, "no_download": True, "include_segments": include_segments},
                                     timeout=580 if include_segments else 120)
             if result is not None and not result.get("ok"):
                 raise T.Fail("the selected live model failed", result.get("code") or "error")
@@ -116,10 +119,12 @@ class CaptionEngine:
                 result = None  # a warm process from before the timestamp protocol was added
             if result is None:
                 self.engine = T.NoteEngine()
-                self.engine.load(None, self.model)
+                self.engine.load(self.language, self.model)
                 self.provider = self.engine.name
         if self.engine is not None:
             options = {"include_segments": True} if include_segments else {}
+            if self.language:
+                options["language"] = self.language
             result = self.engine.note(wav, model_id=self.model, **options)
         if result.get("model") != self.model or result.get("looped"):
             raise T.Fail("live model returned an incomplete result", "bad_response")
@@ -141,9 +146,48 @@ class CaptionEngine:
             send({"ok": False, "event": "file_transcript", "model": self.model, "code": code})
 
 
-def incremental(root: Path, model: str, send, interval=1.5, window_seconds=15, audio_file: Path | None = None):
+FRAME = int(T.SR * .03)          # 30 ms
+
+
+def frame_levels(pcm) -> "T.np.ndarray":
+    """RMS of each 30 ms of 16-bit PCM."""
+    x = T.np.frombuffer(pcm, dtype="<i2", count=len(pcm) // 2).astype(T.np.float32) / 32768
+    k = len(x) // FRAME
+    return T.np.sqrt((x[:k * FRAME].reshape(k, FRAME) ** 2).mean(1)) if k else T.np.zeros(0, T.np.float32)
+
+
+def settle_point(pcm, window_seconds: float, final: bool) -> int:
+    """Where the captions' window is closed (bytes; 0: not yet). A caption piece ends at a pause, never inside a word:
+    after 4 s of audio, a pause of 0.6 s at the end closes it in the middle of that pause; a window that reaches
+    `window_seconds` with no such pause is cut at its quietest 30 ms in its second half. Before, every 15 s was cut
+    wherever it fell — a word split in two came back as two wrong characters and a sentence mark in the middle of it."""
+    if final:
+        return len(pcm)
+    seconds = len(pcm) / RATE
+    if seconds < 4:
+        return 0
+    levels = frame_levels(pcm)
+    if not len(levels):
+        return 0
+    # quiet: under a fifth of the louder speech here (and under -50 dBFS whatever is said)
+    quiet = max(.003, .2 * float(T.np.percentile(levels, 75)))
+    tail = 0
+    for v in levels[::-1]:
+        if v >= quiet:
+            break
+        tail += 1
+    if tail * .03 >= .6 and tail < len(levels):
+        return (len(levels) - tail // 2) * FRAME * 2
+    if seconds >= window_seconds:
+        lo = len(levels) // 2
+        return (lo + int(T.np.argmin(levels[lo:])) + 1) * FRAME * 2
+    return 0
+
+
+def incremental(root: Path, model: str, send, interval=1.5, window_seconds=12, audio_file: Path | None = None,
+                language: str | None = None):
     """Models without a streaming protocol decode their current short window using that same model."""
-    engine = CaptionEngine(model)
+    engine = CaptionEngine(model, language)
     count = 0
     part = 0
     last_size = 0
@@ -156,14 +200,18 @@ def incremental(root: Path, model: str, send, interval=1.5, window_seconds=15, a
             if time.monotonic() - heartbeat >= 2:
                 send({"ok": True, "event": "heartbeat", "model": model})
                 heartbeat = time.monotonic()
-            data = source.read(int(window_seconds * RATE) - len(pending))
+            room = max(0, int(window_seconds * RATE) - len(pending))
+            data = source.read(room) if room else b""
             pending.extend(data)
-            stop = (root / "stop").exists() and not data
+            # stopped only once the file has nothing more (a full window read nothing because it asked for nothing)
+            stop = (root / "stop").exists() and not data and room > 0
             paused = (root / "paused").exists()
-            settle = stop or paused or len(pending) >= window_seconds * RATE
+            cut = settle_point(pending, window_seconds, stop or paused)
+            settle = cut > 0
             enough = len(pending) - last_size >= interval * RATE
             if pending and (settle or enough):
-                x = T.np.frombuffer(pending, dtype="<i2", count=len(pending) // 2).astype(T.np.float32) / 32768
+                piece = pending[:cut] if settle else pending
+                x = T.np.frombuffer(piece, dtype="<i2", count=len(piece) // 2).astype(T.np.float32) / 32768
                 wav.write_bytes(T.wav_bytes(x))
                 result = engine.note(wav)
                 text = result["text"]
@@ -172,11 +220,12 @@ def incremental(root: Path, model: str, send, interval=1.5, window_seconds=15, a
                     ready = True
                 send({"ok": True, "event": "segment" if settle else "partial", "model": model,
                       "provider": engine.provider, "part": part, "text": text, "start": count / RATE,
-                      "end": (count + len(pending)) / RATE})
+                      "end": (count + len(piece)) / RATE})
                 last_size = len(pending)
                 if settle:
-                    count += len(pending)
-                    pending.clear()
+                    # what follows the cut starts the next piece
+                    count += len(piece)
+                    del pending[:cut]
                     last_size = 0
                     part += 1
             if stop:
@@ -192,6 +241,7 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--audio-file", type=Path, help="closed original recording, finalized with the caption model")
+    parser.add_argument("--language", help="the spoken language (zh, en, ja, ko…); default: the model tells")
     args = parser.parse_args()
     T.watch_parent(os.getppid())
     os.environ["POINT_TAKEN_NO_DOWNLOAD"] = "1"
@@ -209,7 +259,7 @@ def main():
             backend = T.Volcengine(argparse.Namespace(language=None))
             stream(args.directory, args.model_id, backend, send)
         else:
-            incremental(args.directory, args.model_id, send, audio_file=args.audio_file)
+            incremental(args.directory, args.model_id, send, audio_file=args.audio_file, language=args.language)
     except T.Fail as error:
         # The UI needs the category, never raw provider errors or credentials.
         send({"ok": False, "event": "error", "model": args.model_id, "code": error.code})

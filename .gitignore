@@ -15,3 +15,12 @@ promo/
 
 # 宣传视频工作区（代码、素材、中间产物、成片都不进仓库）
 /video/
+
+# 签名证书和密钥永远不进仓库（放 GitHub Secrets，见 docs/发布与命名规则.md）
+*.p12
+*.pfx
+*.p8
+*.cer
+*.mobileprovision
+*.provisionprofile
+AuthKey_*.p8

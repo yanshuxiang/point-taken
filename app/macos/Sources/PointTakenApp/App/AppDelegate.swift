@@ -91,7 +91,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// <home>/app.json: which instance is running (its pid and path).
     func writeAppInfo() {
         let info: [String: Any] = ["pid": Int(getpid()), "path": Bundle.main.bundlePath,
-                                   "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""]
+                                   "version": BoardGeneralModel.version]
         if let d = try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]) {
             try? FileManager.default.createDirectory(at: pointTakenHome, withIntermediateDirectories: true)
             try? d.write(to: pointTakenHome.appendingPathComponent("app.json"))

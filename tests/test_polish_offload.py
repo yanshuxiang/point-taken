@@ -45,7 +45,7 @@ class CPUEmbeddingMatches(unittest.TestCase):
     def test_same_rows_as_mlx(self):
         with tempfile.TemporaryDirectory() as d:
             p = subprocess.run(["uv", "run", "-q", "--no-project", "--with", polish.MLX_PACKAGE, "python", "-c", CHECK,
-                                str(SCRIPTS), d], capture_output=True, text=True, timeout=600)
+                                str(SCRIPTS), d], capture_output=True, text=True, encoding="utf-8", timeout=600)
         self.assertEqual(p.stdout.strip(), "ok", p.stderr[-2000:])
 
     def test_other_models_are_left_alone(self):

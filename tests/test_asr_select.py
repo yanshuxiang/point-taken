@@ -8,6 +8,7 @@ No models and no network: fake backends stand in. Tests that need a real model s
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import json
 import os
@@ -23,6 +24,7 @@ import unittest
 import wave
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -44,6 +46,30 @@ def hw(os_="darwin", arch="arm64", ram=128.0, gpu=None, perf=6, eff=12, battery=
          "ane": os_ == "darwin" and arch == "arm64", "on_battery": battery}
     h["tier"] = T.tier_for(h)
     return h
+
+
+@contextlib.contextmanager
+def apple_silicon_mac(**kw):
+    """Model choice on an Apple-silicon Mac (hw(**kw): 128 GB unless said), whatever runs the tests: probe() and the
+    platform key (which models run here) are faked — select() and auto_plan() read both, not the hw passed around.
+    Without it the picks were the runner's: a Linux box has no MLX and no macOS recogniser, an 8 GB Mac a smaller tier."""
+    with mock.patch.object(T, "probe", lambda *_a, **_k: {**hw(**kw), "fingerprint": "test"}),             mock.patch.object(T, "platform_key", lambda: "darwin-arm64"):
+        yield
+
+
+def priority() -> int:
+    """This process's scheduling priority: nice on macOS / Linux, the priority class on Windows (no os.getpriority)."""
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.GetCurrentProcess.restype = ctypes.c_void_p
+        k.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        return k.GetPriorityClass(k.GetCurrentProcess())
+    return os.getpriority(os.PRIO_PROCESS, 0)
+
+
+PRIORITY = "\n" + inspect.getsource(priority)     # the same function in a child process's script
+BELOW_NORMAL, NORMAL = 0x4000, 0x20         # Windows priority classes (apply_priority: utility, user-initiated)
 
 
 @contextlib.contextmanager
@@ -331,7 +357,7 @@ class Limits(unittest.TestCase):
             import transcribe as T
             with T.AsrSlot(1):
                 print("held", flush=True); time.sleep(2.0)
-        """)], stdout=subprocess.PIPE, text=True, env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
+        """)], stdout=subprocess.PIPE, text=True, encoding="utf-8", env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
         self.addCleanup(holder.wait)
         self.assertEqual(holder.stdout.readline().strip(), "held")
         job = f"j-test-{os.getpid()}"
@@ -344,7 +370,7 @@ class Limits(unittest.TestCase):
             self.assertEqual(slot.slot, 0)
         self.assertGreater(waited, 1.0)
         self.assertIn("queued", err.getvalue())
-        events = [json.loads(ln) for ln in (T.POINT_TAKEN_HOME / "jobs" / f"{job}.events.jsonl").read_text().splitlines()]
+        events = [json.loads(ln) for ln in (T.POINT_TAKEN_HOME / "jobs" / f"{job}.events.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual([e["event"] for e in events], ["asr.queued", "asr.started"])
         self.assertEqual(events[0]["step"], {"id": "transcribe", "state": "pending"})
         self.assertEqual(events[1]["step"]["state"], "running")
@@ -357,7 +383,7 @@ class Limits(unittest.TestCase):
             import transcribe as T
             with T.AsrSlot(1):
                 print("held", flush=True); time.sleep(1.5)
-        """)], stdout=subprocess.PIPE, text=True, env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
+        """)], stdout=subprocess.PIPE, text=True, encoding="utf-8", env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
         self.addCleanup(holder.wait)
         holder.stdout.readline()
         with self.assertRaises(T.Fail) as e, contextlib.redirect_stderr(io.StringIO()):
@@ -373,22 +399,24 @@ class Limits(unittest.TestCase):
             import json, os, sys, threading, time
             sys.path.insert(0, {str(SCRIPTS)!r})
             import transcribe as T
+        """) + PRIORITY + textwrap.dedent("""
             T.throttle("batch", 2)
-            q0 = T.qos_cpu_seconds() or {{}}
+            q0 = T.qos_cpu_seconds() or {}
             def burn():
                 t = time.time()
                 while time.time() - t < 0.6: sum(i * i for i in range(2000))
             ts = [threading.Thread(target=burn) for _ in range(2)]
             [t.start() for t in ts]; [t.join() for t in ts]
-            q1 = T.qos_cpu_seconds() or {{}}
-            print(json.dumps({{"nice": os.getpriority(os.PRIO_PROCESS, 0), "omp": os.environ.get("OMP_NUM_THREADS"),
+            q1 = T.qos_cpu_seconds() or {}
+            print(json.dumps({"nice": priority(), "omp": os.environ.get("OMP_NUM_THREADS"),
                               "clamp": os.environ.get("POINT_TAKEN_QOS_CLAMP"),
-                              "qos": {{k: round(v - q0.get(k, 0), 2) for k, v in q1.items()}}}}))
-        """))
-        p = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
+                              "qos": {k: round(v - q0.get(k, 0), 2) for k, v in q1.items()}}))
+        """), encoding="utf-8")
+        p = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=60,
                            env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
+        self.assertEqual(p.returncode, 0, p.stderr)
         out = json.loads(p.stdout.strip().splitlines()[-1])
-        self.assertEqual((out["nice"], out["omp"]), (10, "2"))
+        self.assertEqual((out["nice"], out["omp"]), (BELOW_NORMAL if os.name == "nt" else 10, "2"))
         if sys.platform == "darwin" and Path("/usr/sbin/taskpolicy").exists():
             self.assertEqual(out["clamp"], "utility")
             q = out["qos"]  # CPU seconds the worker threads burnt, per QoS class
@@ -398,10 +426,12 @@ class Limits(unittest.TestCase):
         p = subprocess.run([sys.executable, "-c", textwrap.dedent(f"""
             import os, sys; sys.path.insert(0, {str(SCRIPTS)!r})
             import transcribe as T
-            print(T.apply_priority("user-initiated"), os.getpriority(os.PRIO_PROCESS, 0))
-        """)], capture_output=True, text=True, timeout=60, env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
-        # unchanged from what it inherited (a test runner may itself run niced, e.g. in the background)
-        self.assertTrue(p.stdout.strip().endswith(f" {os.getpriority(os.PRIO_PROCESS, 0)}"), p.stdout + p.stderr)
+        """) + PRIORITY + 'print(T.apply_priority("user-initiated"), priority())\n'],
+            capture_output=True, text=True, encoding="utf-8", timeout=60, env={**os.environ, "POINT_TAKEN_HOME": str(T.POINT_TAKEN_HOME)})
+        # macOS / Linux: unchanged from what it inherited (a test runner may itself run niced, e.g. in the background);
+        # Windows: the normal priority class, set (a child of a below-normal runner would inherit below normal)
+        want = NORMAL if os.name == "nt" else priority()
+        self.assertTrue(p.stdout.strip().endswith(f" {want}"), p.stdout + p.stderr)
 
     def test_real_thread_cap(self):
         """With the real SenseVoice model (skipped when not downloaded): 1 thread ≈ 1 busy core, 4 threads > 1.5."""
@@ -462,7 +492,7 @@ class Notes(unittest.TestCase):
             self.assertTrue(T._server_call({"cmd": "ping"})["loaded"])
             r = T._server_call({"cmd": "note", "wav": str(write_wav(self.tmp / "s.wav", 2.0)), "language": "auto"})
             self.assertEqual((r["ok"], r["text"]), (True, "heard 2.0s"))
-            info = json.loads(T.SERVE_FILE.read_text())
+            info = json.loads(T.SERVE_FILE.read_text(encoding="utf-8"))
             import socket
             with socket.create_connection(("127.0.0.1", info["port"]), timeout=2) as s:  # wrong token
                 s.sendall(b'{"cmd": "ping", "token": "nope"}\n')
@@ -540,7 +570,7 @@ class Notes(unittest.TestCase):
         try:
             with config({"asr": {"auto": False, "backend": "sensevoice"}}):
                 th, out = self.serve_in_thread(Namespace(preload=True, idle=600, exit_after=1800, parent=child.pid))
-                self.assertEqual(json.loads(T.SERVE_FILE.read_text())["parent"], child.pid)
+                self.assertEqual(json.loads(T.SERVE_FILE.read_text(encoding="utf-8"))["parent"], child.pid)
                 self.assertTrue(T._server_call({"cmd": "ping"})["ok"])
                 child.kill()
                 child.wait()
@@ -609,11 +639,9 @@ class CLI(unittest.TestCase):
     def test_auto_apply_pins_only_the_recommended(self):
         # a stand-in (a Whisper from a shared cache while the 1.7B isn't in) is never pinned: once the 1.7B is in,
         # it runs — before the next `auto --apply`
-        probe = T.probe
-        T.probe = lambda *a, **k: {**hw(ram=128), "fingerprint": "test"}
         real = fake_installed("apple-speech", "whisper-large-v3-turbo-mlx", "silero-vad")
         try:
-            with config({"asr": {"languages": ["zh", "en"]}}):
+            with apple_silicon_mac(ram=128), config({"asr": {"languages": ["zh", "en"]}}):
                 out = T.auto_plan(True)
                 self.assertEqual(out["models"]["batch"], "whisper-large-v3-turbo-mlx")
                 self.assertEqual(T.global_config()["asr"]["models"], {})
@@ -622,7 +650,7 @@ class CLI(unittest.TestCase):
                 T.auto_plan(True)
                 self.assertEqual(T.global_config()["asr"]["models"]["note"], "qwen3-asr-1.7b-mlx")
         finally:
-            T.probe, T.installed = probe, real
+            T.installed = real
 
 
 # ------------------------------------------------------------------ installs, metric, language codes
@@ -633,7 +661,7 @@ class Install(unittest.TestCase):
         (top / "tokenizer").mkdir(parents=True)
         (top / "test_wavs").mkdir()
         (top / "model.onnx").write_bytes(b"onnx")
-        (top / "tokenizer" / "vocab.json").write_text("{}")
+        (top / "tokenizer" / "vocab.json").write_text("{}", encoding="utf-8")
         (top / "test_wavs" / "a.wav").write_bytes(b"x" * 100)
         arc = src / "m.tar.bz2"
         with tarfile.open(arc, "w:bz2") as tar:
@@ -648,7 +676,7 @@ class Install(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             path = T.install_model(m)
         self.addCleanup(lambda: __import__("shutil").rmtree(path, ignore_errors=True))
-        self.assertEqual(sorted(str(p.relative_to(path)) for p in path.rglob("*")),
+        self.assertEqual(sorted(p.relative_to(path).as_posix() for p in path.rglob("*")),
                          ["model.onnx", "tokenizer", "tokenizer/vocab.json"])
         self.assertTrue(T.installed(m))
 
@@ -688,6 +716,9 @@ class Install(unittest.TestCase):
 class AppleSpeechSelect(unittest.TestCase):
     """Nothing downloaded: macOS 26's SpeechTranscriber runs dictation, voice notes and recordings; a local model takes
     over as soon as one is installed; never for a language it doesn't speak."""
+
+    def setUp(self):
+        self.enterContext(apple_silicon_mac())
 
     def test_it_runs_when_nothing_is_downloaded(self):
         real = fake_installed("apple-speech")
@@ -793,6 +824,7 @@ class AppleSpeechSelect(unittest.TestCase):
         with config({"asr": {"languages": ["en", "zh"], "language": "en"}}):
             self.assertEqual(T.apple_locale(None), "en-US")
 
+    @unittest.skipIf(os.name == "nt", "the stand-in for the app is a shell script (and the recogniser is macOS's)")
     def test_whole_audio_through_the_app_without_vad(self):
         # the Point Taken executable's `--speech` answer, faked: one line of JSON with each phrase's time
         with tempfile.TemporaryDirectory() as d:
@@ -801,7 +833,7 @@ class AppleSpeechSelect(unittest.TestCase):
                 #!/bin/sh
                 echo '{"event":"apple_speech_assets","result":"installed"}'
                 echo '{"ok":true,"text":"你好。世界。","locale":"'"$4"'","segments":[{"start":0.1,"end":0.9,"text":"你好。"},{"start":1.0,"end":1.4,"text":"世界。"}]}'
-                """))
+                """), encoding="utf-8")
             helper.chmod(0o755)
             old = (os.environ.get("POINT_TAKEN_APP_BIN"), T._APPLE_OK, T.vad_segments)
             os.environ["POINT_TAKEN_APP_BIN"] = str(helper)
@@ -848,7 +880,7 @@ class DictationTier(unittest.TestCase):
     checked against too."""
 
     def test_the_shared_fixture(self):
-        rows = [json.loads(l) for l in (ROOT / "tests" / "fixtures" / "dictation_tier.jsonl").read_text().splitlines() if l.strip()]
+        rows = [json.loads(l) for l in (ROOT / "tests" / "fixtures" / "dictation_tier.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
         self.assertGreaterEqual(len(rows), 10)
         for r in rows:
             got = T.dictation_tier(r["ram_gb"], r["rtf"], r["slow"], r["cloud"], r.get("languages"))
@@ -925,6 +957,7 @@ class CloudSpeed(unittest.TestCase):
     def test_dictation_offers_a_keyed_cloud_service(self):
         real = fake_installed("apple-speech")
         old = os.environ.get("DASHSCOPE_API_KEY")
+        self.enterContext(apple_silicon_mac())
         try:
             with config({"asr": {"languages": ["zh"]}}):
                 os.environ.pop("DASHSCOPE_API_KEY", None)

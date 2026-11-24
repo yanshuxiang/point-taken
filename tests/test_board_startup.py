@@ -20,7 +20,7 @@ class BoardStartup(unittest.TestCase):
     def test_new_record_retention_and_temporal_references(self):
         result = subprocess.run([str(BIN), "--board-evidence-check"],
                                 env=dict(os.environ, POINT_TAKEN_BOARD_HOME="1"),
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
         event = next(e for e in events if e.get("event") == "board_evidence_check")
@@ -30,7 +30,7 @@ class BoardStartup(unittest.TestCase):
     def test_passive_messages_and_delivery_follow_scope(self):
         result = subprocess.run([str(BIN), "--board-scope-check"],
                                 env=dict(os.environ, POINT_TAKEN_BOARD_HOME="1"),
-                                capture_output=True, text=True, timeout=20)
+                                capture_output=True, text=True, encoding="utf-8", timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
         event = next(e for e in events if e.get("event") == "board_scope_check")
@@ -38,7 +38,7 @@ class BoardStartup(unittest.TestCase):
 
     def test_review_editing_focus_and_full_transcript(self):
         result = subprocess.run([str(BIN), "--board-workflow-check"],
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
         event = next(e for e in events if e.get("event") == "board_workflow_check")
@@ -47,7 +47,7 @@ class BoardStartup(unittest.TestCase):
 
     def test_background_and_final_transcript_reach_delivery(self):
         result = subprocess.run([str(BIN), "--board-retention-check"],
-                                capture_output=True, text=True, timeout=20)
+                                capture_output=True, text=True, encoding="utf-8", timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
         event = next(e for e in events if e.get("event") == "board_retention_check")
@@ -57,7 +57,7 @@ class BoardStartup(unittest.TestCase):
     def test_capsule_content_stays_inside_window(self):
         self.assertTrue(BIN.is_file(), "Build the macOS release executable first")
         result = subprocess.run([str(BIN), "--board-startup-check"],
-                                capture_output=True, text=True, timeout=20)
+                                capture_output=True, text=True, encoding="utf-8", timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
         event = next(e for e in events if e.get("event") == "board_startup_check")

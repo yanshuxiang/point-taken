@@ -456,10 +456,10 @@ class CLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             d = Path(home) / "models" / "polish" / "Qwen3.5-0.8B-MLX-4bit"
             d.mkdir(parents=True)
-            (d / "config.json").write_text("{}")
+            (d / "config.json").write_text("{}", encoding="utf-8")
             (d / "model.safetensors").write_bytes(b"x")
             (Path(home) / "config.json").write_text(json.dumps({"record": {"dictation": {"polish_model": "qwen3.5-0.8b",
-                                                                                          "polish_timeout_ms": 1500}}}))
+                                                                                          "polish_timeout_ms": 1500}}}), encoding="utf-8")
             code, o = self.run_cli("models", home=home)
             self.assertEqual(o["selected"], "qwen3.5-0.8b")
             self.assertEqual(o["timeout_ms"], 1500)
@@ -781,9 +781,11 @@ class ServeWhileLoading(unittest.TestCase):
         return polish._server_call(req, timeout)
 
     def test_what_needs_no_model_is_answered_at_once_and_a_wait_is_load_time(self):
-        # throttle() would lower the whole test runner's priority (and with it pytest's own output was lost)
-        saved = (polish.Engine, polish.ensure_mlx, polish.throttle)
-        polish.Engine, polish.ensure_mlx, polish.throttle = self.Slow, (lambda: None), (lambda _p=None: {})
+        # throttle() would lower the whole test runner's priority (and with it pytest's own output was lost);
+        # supported(): the server preloads a local model only where MLX runs (Apple Silicon) — this is that Mac,
+        # whatever runs the tests (elsewhere it never preloads, and "load" answered without "loading")
+        saved = (polish.Engine, polish.ensure_mlx, polish.throttle, polish.supported)
+        polish.Engine, polish.ensure_mlx, polish.throttle, polish.supported =             self.Slow, (lambda: None), (lambda _p=None: {}), (lambda: True)
         args = argparse.Namespace(preload=True, model_id="fake", priority=None, idle=600, exit_after=1800, parent=None)
         th = threading.Thread(target=lambda: polish.cmd_serve(args), daemon=True)
         try:
@@ -810,7 +812,7 @@ class ServeWhileLoading(unittest.TestCase):
                 self.call({"cmd": "exit"})
                 th.join(5)
         finally:
-            polish.Engine, polish.ensure_mlx, polish.throttle = saved
+            polish.Engine, polish.ensure_mlx, polish.throttle, polish.supported = saved
         self.assertFalse(polish.SERVE_FILE.exists())
 
 

@@ -32,6 +32,15 @@ TERMS = V.normalize([
     {"term": "Pending", "state": "suggested", "source": "learned"},
 ])
 
+# Two things dictation_vocab takes from macOS and finds nowhere else (it does without them, by design): the system
+# lexicon, /usr/share/dict/words, which tells a fix to an ordinary word (grammar) from a name; and CoreFoundation's
+# Mandarin → pinyin transform (or pypinyin, not one of the scripts' dependencies), which finds a term misheard as other
+# characters of the same sound. A Linux runner or Windows has neither: the tests of what they decide skip there.
+HAS_LEXICON = V.common_word("pool")
+HAS_PINYIN = V.pinyin("汇") == "hui"
+NO_LEXICON = "no system lexicon here (/usr/share/dict/words, macOS)"
+NO_PINYIN = "no Mandarin-to-pinyin here (macOS's CoreFoundation, or pypinyin)"
+
 
 class Store(unittest.TestCase):
     def test_only_active_terms_deduplicated(self):
@@ -46,9 +55,9 @@ class Store(unittest.TestCase):
     def test_load_reads_the_apps_file(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "vocabulary.json"
-            p.write_text(json.dumps({"schema": 1, "terms": [{"term": "Codex", "source": "project", "hits": 2}]}))
+            p.write_text(json.dumps({"schema": 1, "terms": [{"term": "Codex", "source": "project", "hits": 2}]}), encoding="utf-8")
             self.assertEqual([t["term"] for t in V.load(p)], ["Codex"])
-            p.write_text("not json")
+            p.write_text("not json", encoding="utf-8")
             self.assertEqual(V.load(p), [])
             self.assertEqual(V.load(Path(d) / "missing.json"), [])
 
@@ -165,7 +174,7 @@ class GuardWithVocab(unittest.TestCase):
     def test_guard_cli_takes_terms_and_context(self):
         import subprocess
         p = subprocess.run([sys.executable, str(SCRIPTS / "polish.py"), "guard", "用cloud code跑一下",
-                            "用 Claude Code 跑一下。", "--terms", "Claude Code"], capture_output=True, text=True)
+                            "用 Claude Code 跑一下。", "--terms", "Claude Code"], capture_output=True, text=True, encoding="utf-8")
         self.assertTrue(json.loads(p.stdout.splitlines()[-1])["pass"])
 
 
@@ -341,6 +350,7 @@ class BiasedNote(unittest.TestCase):
     def test_dictation_models_rows(self):
         import test_asr_select as A
         T = A.T
+        self.enterContext(A.apple_silicon_mac())
         real = A.fake_installed("sensevoice-small")
         try:
             with A.config({"asr": {"auto": False, "backend": "sensevoice", "languages": ["de", "en"]}}):
@@ -383,6 +393,7 @@ class BiasedNote(unittest.TestCase):
         # counts the pair a dictation holds — recogniser + polish model — not the recogniser alone
         import test_asr_select as A
         T = A.T
+        self.enterContext(A.apple_silicon_mac())
         real = A.fake_installed("sensevoice-small", "qwen3-asr-1.7b-mlx")
         try:
             base = {"asr": {"auto": False, "backend": "sensevoice"}}
@@ -417,7 +428,7 @@ class BiasedNote(unittest.TestCase):
         T = A.T
         self.assertEqual(T.progress_line(812 * 2**20, 2468 * 2**20), "  812.0/2468.0 MB")
         self.assertEqual(T.progress_line(1.5 * 2**20, 1.7 * 2**20, "vad"), "  vad 1.5/1.7 MB")
-        src = (A.SCRIPTS / "transcribe.py").read_text()
+        src = (A.SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
         self.assertIn('download("silero_vad.onnx", aux="vad")', src)
 
 
@@ -574,16 +585,22 @@ class LearnFromCorrection(unittest.TestCase):
         self.assertEqual(V.fixes("后来他去了Asopic做研究", "后来他去了Anthropic做研究"),
                          [{"heard": "Asopic", "fixed": "Anthropic", "kind": "spelling"}])
         self.assertEqual(V.fixes("我喜欢拼多朵", "我喜欢拼多多"), [{"heard": "拼多朵", "fixed": "拼多多", "kind": "sound"}])
-        self.assertEqual(V.fixes("open the pool request", "open the pull request"),
-                         [{"heard": "pool request", "fixed": "pull request", "kind": "spelling"}])
-        self.assertEqual(V.fixes("there car", "their car"), [])                # grammar, not vocabulary
         self.assertEqual(V.fixes("今天下午开会", "明天上午我们一起去公司吃饭然后开会"), [])   # a rewrite
         self.assertEqual(V.fixes("same text", "same text"), [])
 
-    def test_two_fixes_side_by_side_are_two_never_one_with_a_comma(self):
+    @unittest.skipUnless(HAS_LEXICON, NO_LEXICON)
+    def test_ordinary_words(self):
+        self.assertEqual(V.fixes("open the pool request", "open the pull request"),
+                         [{"heard": "pool request", "fixed": "pull request", "kind": "spelling"}])
+        self.assertEqual(V.fixes("there car", "their car"), [])                # grammar, not vocabulary
+
+    @unittest.skipUnless(HAS_PINYIN, NO_PINYIN)
+    def test_two_fixes_side_by_side_in_chinese(self):
         # dogfood d54: 绘画 BA 三 → 会话，BA-3 was learned as one active word "会话，BA-3" (the app's rule, ported)
         self.assertEqual(V.fixes("先看绘画 BA 三的进度", "先看会话，BA-3的进度"),
                          [{"heard": "绘画", "fixed": "会话", "kind": "sound"}])
+
+    def test_two_fixes_side_by_side_are_two_never_one_with_a_comma(self):
         self.assertEqual([f["fixed"] for f in V.fixes("ask cloud, code it", "ask Claude; Codex it")], ["Claude", "Codex"])
         self.assertEqual([f["fixed"] for f in V.fixes("open cloud code in tmux", "open Claude Code in tmux")], ["Claude Code"])
         with tempfile.TemporaryDirectory() as d:
@@ -597,7 +614,7 @@ class LearnFromCorrection(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "dictation" / "vocabulary.json"
             path.parent.mkdir()
-            path.write_text(json.dumps({"schema": 1, "terms": [{"term": "Claude", "state": "active", "source": "default"}]}))
+            path.write_text(json.dumps({"schema": 1, "terms": [{"term": "Claude", "state": "active", "source": "default"}]}), encoding="utf-8")
             r = V.learn("后来他去了Asopic做研究", "后来他去了Anthropic做研究", path=path)
             self.assertTrue(r["written"])
             self.assertEqual(r["fixes"][0]["result"], "learned")
@@ -610,7 +627,7 @@ class LearnFromCorrection(unittest.TestCase):
             self.assertEqual(heard(["CEO 是 Dario 的 Asopic 吧"], terms), ["CEO 是 Dario 的 Asopic 吧"])
             # the same fix again: known, hits counted, nothing duplicated
             self.assertEqual(V.learn("Asopic 的模型", "Anthropic 的模型", path=path)["fixes"][0]["result"], "known")
-            doc = json.loads(path.read_text())
+            doc = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual([t["term"] for t in doc["terms"]].count("Anthropic"), 1)
             self.assertEqual(doc["terms"][0]["term"], "Claude")                # the rest untouched
 
@@ -622,13 +639,13 @@ class LearnFromCorrection(unittest.TestCase):
             self.assertEqual(V.load(path), [])                                  # a suggestion isn't used yet
             self.assertEqual(V.learn("用Tipless听写", "用Typeless听写", explicit=False, path=path)["fixes"][0]["result"],
                              "learned")                                          # the second time it is
-            doc = json.loads(path.read_text())
+            doc = json.loads(path.read_text(encoding="utf-8"))
             doc["terms"][0]["state"] = "rejected"
-            path.write_text(json.dumps(doc))
+            path.write_text(json.dumps(doc), encoding="utf-8")
             self.assertIsNone(V.learn("用Typles听写", "用Typeless听写", path=path)["fixes"][0]["result"])
-            before = path.read_text()
+            before = path.read_text(encoding="utf-8")
             self.assertFalse(V.learn("我用Kimmi", "我用Kimi", path=path, dry_run=True)["written"])
-            self.assertEqual(path.read_text(), before)
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_cli(self):
         import subprocess
@@ -636,11 +653,11 @@ class LearnFromCorrection(unittest.TestCase):
             path = Path(d) / "vocabulary.json"
             out = subprocess.run([sys.executable, str(SCRIPTS / "dictation_vocab.py"), "learn", "--raw", "我用Typless听写",
                                   "--corrected", "我用Typeless听写", "--file", str(path)],
-                                 capture_output=True, text=True, check=True).stdout
+                                 capture_output=True, text=True, encoding="utf-8", check=True).stdout
             r = json.loads(out)
             self.assertTrue(r["ok"] and r["written"])
             self.assertEqual(V.load(path)[0]["term"], "Typeless")
-            self.assertEqual(json.loads(path.read_text())["schema"], V.SCHEMA)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema"], V.SCHEMA)
 
 
 if __name__ == "__main__":
@@ -650,6 +667,7 @@ if __name__ == "__main__":
 class SoundsAlike(unittest.TestCase):
     """A Chinese term misheard as characters of the same sound is found (and listed for the model), never replaced."""
 
+    @unittest.skipUnless(HAS_PINYIN, NO_PINYIN)
     def test_a_misheard_term_is_found(self):
         self.assertEqual(V.sounds_in("空中云汇", "我们用空中云会收款"), "空中云会")
         self.assertEqual(V.sounds_in("懂你意思", "打开董尼一丝"), "董尼一丝")
@@ -660,6 +678,7 @@ class SoundsAlike(unittest.TestCase):
     def test_two_characters_both_different_are_too_loose(self):
         self.assertIsNone(V.sounds_in("会话", "飞书绘画里面的消息"))
 
+    @unittest.skipUnless(HAS_PINYIN, NO_PINYIN)
     def test_relevant_and_ranked_bring_the_term_first(self):
         terms = [{"term": t, "sounds_like": [], "source": "manual", "hits": 0} for t in ("Notion", "空中云汇")]
         raw = "我们用空中云会收款"

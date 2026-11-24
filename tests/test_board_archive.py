@@ -105,12 +105,12 @@ class BoardArchive(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='point-taken-archive-check-') as temporary:
             directory = Path(temporary)
             main = directory / 'main.swift'
-            main.write_text(HARNESS)
+            main.write_text(HARNESS, encoding="utf-8")
             binary = directory / 'check'
             env = dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer')
             built = subprocess.run(['xcrun', 'swiftc', str(SOURCE), str(main), '-o', str(binary)],
-                                   env=env, capture_output=True, text=True, timeout=90)
+                                   env=env, capture_output=True, text=True, encoding="utf-8", timeout=90)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            result = subprocess.run([str(binary), str(directory)], capture_output=True, text=True, timeout=20)
+            result = subprocess.run([str(binary), str(directory)], capture_output=True, text=True, encoding="utf-8", timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('PASS:', result.stdout)
