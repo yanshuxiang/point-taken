@@ -10,7 +10,11 @@ All notable changes to Point Taken are documented here. The format is based on
 
 ## [Unreleased]
 
-Windows 版根据第一批用户反馈修改，并用 10 分钟真人录音的完整会话实测过。
+## [0.2.0] - 2026-11-24
+
+第一个同时提供 macOS 和 Windows 的正式版。相对 0.1.2：新增 Windows 版（安装程序和免安装 zip），两个平台由 GitHub Actions 用同一个版本号构建发布；Windows 版根据 0.2.0 测试版用户的反馈做了下面这些修改，并用 10 分钟真人录音的完整会话实测过。
+
+The first release for both macOS and Windows. Since 0.1.2: Point Taken for Windows (installer and portable zip), and both platforms built and published by GitHub Actions under one version number. The Windows changes below come from feedback on the 0.2.0 betas and were tested in full 10-minute sessions with real speech.
 
 ### 新增
 - Windows：胶囊上新增「截图」按钮，不画标记也能把当前窗口存成一页。
@@ -47,6 +51,14 @@ Windows 版根据第一批用户反馈修改，并用 10 分钟真人录音的�
 - Windows: memory use. Ten-minute sessions now stay between 122 and 198 MB with no growth over time; one user had reported 359 MB after 8 minutes.
 - Windows: the recognition-language setting was never passed to the model, which guessed the language and sometimes took short or accented speech for another one.
 - Transcription: duplicated characters and stray full stops where a word had been cut in two.
+
+### 已知限制
+- 两个平台的安装包都还没有受信任的签名：macOS 版是 ad-hoc 签名、未公证；Windows 版未签名，SmartScreen 会提示「未知发布者」。从 0.1.x 升级的 macOS 用户需要在「系统设置 → 隐私与安全性」里重新允许一次屏幕录制、麦克风和辅助功能。
+- Windows 版只有简体中文界面；同一页连续滚动时不会自动拼成长图。
+
+### Known limitations
+- Neither build has a trusted signature yet: macOS is ad-hoc signed and not notarized; Windows is unsigned, so SmartScreen shows "unknown publisher". macOS users upgrading from 0.1.x need to allow Screen Recording, Microphone and Accessibility once more in System Settings → Privacy & Security.
+- The Windows interface is in Simplified Chinese only, and a page scrolled in place is not stitched into one long picture.
 
 ## [0.2.0-beta.2] - 2026-11-19
 
@@ -113,7 +125,8 @@ Point Taken（懂你意思）首个版本（macOS，Apple 芯片，macOS 13 及�
 
 First release (macOS, Apple silicon, macOS 13 or later).
 
-[Unreleased]: https://github.com/yanshuxiang/point-taken/compare/v0.2.0-beta.2...HEAD
+[Unreleased]: https://github.com/yanshuxiang/point-taken/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/yanshuxiang/point-taken/compare/v0.1.2...v0.2.0
 [0.2.0-beta.2]: https://github.com/yanshuxiang/point-taken/compare/v0.1.2...v0.2.0-beta.2
 [0.2.0-beta.1]: https://github.com/yanshuxiang/point-taken/releases/tag/v0.2.0-beta.1
 [0.1.2]: https://github.com/yanshuxiang/point-taken/compare/v0.1.1...v0.1.2
