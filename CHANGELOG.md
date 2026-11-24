@@ -10,6 +10,44 @@ All notable changes to Point Taken are documented here. The format is based on
 
 ## [Unreleased]
 
+Windows 版根据第一批用户反馈修改，并用 10 分钟真人录音的完整会话实测过。
+
+### 新增
+- Windows：胶囊上新增「截图」按钮，不画标记也能把当前窗口存成一页。
+- Windows：胶囊上新增「麦克风」按钮。关掉后只记画的、不录音；再打开时另起一段，实时字幕和完整转写里都分段。
+- Windows：设置 → 通用新增「截图范围」（标记所在的窗口 / 整个屏幕）和「没画的画面也留页」。
+- Windows：设置 → 模型与 API 推荐更准确的本机模型 Fun-ASR-Nano（约 950 MB）。在一段 2 分 45 秒的中文测试录音上，错字率从 SenseVoice 的 10.4% 降到 6.3%。
+
+### 变化
+- Windows：画了标记的那一页默认只截标记所在的窗口，不再截整个屏幕；在菜单上画时会连同它所属的程序窗口一起截。
+- Windows：只说过话、没画标记的画面默认不再自动截图留页，记录里的文件少了很多。
+- Windows：原始录音改为设备采样率的 16 位单声道，大小约为原来的四分之一（8 分钟约 46 MB）；转写完成后删掉重复的录音副本。
+- 转写：只在停顿或最安静的地方切分录音，片段之间不再重叠；实时字幕在停顿处断句，不再每 15 秒硬切一刀。
+
+### 修复
+- Windows：按住 Ctrl 画时，按下鼠标的一刻就由画笔接管，不会再拖动或点到下面程序里的图片和文字。
+- Windows：内存占用。10 分钟会话实测稳定在 122–198 MB，不再随时间增长；之前曾有用户报告 8 分钟涨到 359 MB。
+- Windows：设置里的「识别语言」以前没有传给模型，模型会自己猜语言，把短句或带口音的话认成别的语言。现在按设置识别。
+- 转写：词被从中间切开时出现的重复字和多余句号（如「横坐标和。和一个」）。
+
+### Added
+- Windows: a 截图 (screenshot) button on the capsule saves the window in front as a page without marking it.
+- Windows: a microphone button on the capsule. While it is off, marks are still kept but nothing is recorded; turning it back on starts a new take, which is a paragraph of its own in the live and the final text.
+- Windows: Settings → General → screenshot area (the marked window, or the whole screen), and an option to keep screens that were only talked over.
+- Windows: Settings → Models offers Fun-ASR-Nano (about 950 MB) as the more accurate local model. On a 2:45 Chinese test recording its character error rate was 6.3%, against 10.4% for SenseVoice.
+
+### Changed
+- Windows: a marked page shows only the window(s) under the marks instead of the whole screen; a mark on a menu keeps the app the menu belongs to.
+- Windows: screens that were only talked over no longer become pages by default, so a record holds far fewer files.
+- Windows: the recording is 16-bit mono at the device's rate, about a quarter of its former size (about 46 MB for 8 minutes); the duplicate 16 kHz copy is removed once transcription is done.
+- Transcription: speech is cut only at pauses or at its quietest moment, never with overlapping pieces; live captions break at pauses instead of every 15 seconds.
+
+### Fixed
+- Windows: holding Ctrl to draw takes the mouse press at once, so it no longer drags or clicks pictures or text in the app below.
+- Windows: memory use. Ten-minute sessions now stay between 122 and 198 MB with no growth over time; one user had reported 359 MB after 8 minutes.
+- Windows: the recognition-language setting was never passed to the model, which guessed the language and sometimes took short or accented speech for another one.
+- Transcription: duplicated characters and stray full stops where a word had been cut in two.
+
 ## [0.2.0-beta.2] - 2026-11-19
 
 macOS 和 Windows 第一次用同一个版本号、由 GitHub Actions 自动构建发布。
