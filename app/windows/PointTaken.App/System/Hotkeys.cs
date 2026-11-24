@@ -174,6 +174,22 @@ public sealed class HoldKeys
     /// Lets go of a held tool without restoring anything (the user picked a tool in the capsule).
     public void ReleaseHold() { held = null; pendingTool = null; }
 
+    /// The tool whose keys are held down right now, unless they became a shortcut for the app in front.
+    public InkTool? Pressed() => shortcut ? null : Match();
+
+    /// The mouse went down with the keys held before the hold settled: the tool is held from now on, so the press is
+    /// the pen's and never the app's (a Ctrl+drag would otherwise drag a picture or a file in the app below).
+    public bool HoldNow(InkTool tool)
+    {
+        if (held is { } h) return h.tool == tool;
+        if (Hold?.Invoke(tool) is not { ok: true } r) return false;
+        held = (tool, r.before);
+        pressedAt = Uptime.Now;
+        drewWhileHeld = false;
+        pendingTool = null;
+        return true;
+    }
+
     static InkTool? Match()
     {
         var now = new KeyCombo(Native.Down(Native.VK_CONTROL), Native.Down(Native.VK_MENU), Native.Down(Native.VK_SHIFT),

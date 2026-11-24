@@ -286,6 +286,9 @@ public static class Icons
     public static readonly Geometry Checkmark = G("M4,12.5 L9.5,18 L20,6");
     public static readonly Geometry Photo = G("M4,5 L20,5 Q21,5 21,6 L21,18 Q21,19 20,19 L4,19 Q3,19 3,18 L3,6 Q3,5 4,5 Z M3,16 L8,11 L13,16 L16,13 L21,18 M15.5,8.5 L15.6,8.5");
     public static readonly Geometry Triangle = G("M12,3.5 L22,20.5 L2,20.5 Z");
+    public static readonly Geometry Camera = G("M4,8 Q4,7 5,7 L8,7 L9.5,5 L14.5,5 L16,7 L19,7 Q20,7 20,8 L20,18 Q20,19 19,19 L5,19 Q4,19 4,18 Z M12,9.5 A3.5,3.5 0 1 1 11.99,9.5 Z");
+    public static readonly Geometry Mic = G("M12,3 Q14.5,3 14.5,5.5 L14.5,11.5 Q14.5,14 12,14 Q9.5,14 9.5,11.5 L9.5,5.5 Q9.5,3 12,3 Z M6.5,11 Q6.5,17 12,17 Q17.5,17 17.5,11 M12,17 L12,21 M9,21 L15,21");
+    public static readonly Geometry MicSlash = G("M12,3 Q14.5,3 14.5,5.5 L14.5,11.5 Q14.5,14 12,14 Q9.5,14 9.5,11.5 L9.5,5.5 Q9.5,3 12,3 Z M6.5,11 Q6.5,17 12,17 Q17.5,17 17.5,11 M12,17 L12,21 M9,21 L15,21 M4,3.5 L20,20.5");
     public static readonly Geometry Close = G("M6,6 L18,18 M18,6 L6,18");
     public static readonly Geometry Minimize = G("M5,12 L19,12");
     public static readonly Geometry Maximize = G("M5,5 L19,5 L19,19 L5,19 Z");

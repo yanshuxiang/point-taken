@@ -1,6 +1,9 @@
-// The microphone for an annotation session: the original samples go to 原始录音.wav unchanged (the device's own
-// rate, channels and 32-bit float, like the macOS app), and a 16 kHz mono 16-bit copy goes to 实时语音/audio.pcm for
-// the caption model. Writes happen on one worker, never in the capture callback. While paused nothing is written.
+// The microphone for an annotation session: the samples go to 原始录音.wav at the device's own rate as 16-bit mono —
+// a quarter of the 32-bit float stereo the device delivers (8 minutes: about 46 MB, not 184 MB), nothing a speech
+// model or a listener can tell apart — and a 16 kHz mono 16-bit copy goes to 实时语音/audio.pcm for the caption
+// model. Writes happen on one worker, never in the capture callback. While paused (or the microphone is off) nothing
+// is written; where recording resumes, 2 s of silence goes in (BoardTranscript.TakeGap), so a take never runs into the next one (the final
+// pass hears a pause there) and Breaks says where each new take begins.
 using System.Collections.Concurrent;
 using NAudio.CoreAudioApi;
 using NAudio.Dsp;
@@ -14,7 +17,8 @@ public sealed class BoardAudio : IDisposable
     public Action<string>? OnFailure;
     public Action<string>? OnWriteWarning;
 
-    WasapiCapture? capture;
+    IWaveIn? capture;
+    volatile bool capturing;
     WaveFileWriter? archive;
     FileStream? livePcm;
     WdlResampler? resampler;
@@ -31,7 +35,7 @@ public sealed class BoardAudio : IDisposable
     bool dropWarned;
     public bool ArchiveIncomplete { get; private set; }
 
-    public bool Running => capture?.CaptureState == CaptureState.Capturing;
+    public bool Running => capturing;
     /// seconds of audio actually written to the archive
     public double Seconds { get { lock (lockObj) return format == null ? 0 : framesWritten / (double)format.SampleRate; } }
     public string? LivePcmPath { get; private set; }
@@ -39,10 +43,16 @@ public sealed class BoardAudio : IDisposable
     /// Opens the default microphone. Throws with a sentence for the user when it can't.
     public void Start(string archivePath, string? livePcmPath)
     {
-        var device = new MMDeviceEnumerator().GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
-        capture = new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: 50);
+        // POINT_TAKEN_TEST_MIC=<a WAV>: that recording is played in real time in place of the microphone — for testing
+        // the whole session with real speech on a machine whose speakers don't reach its microphone
+        if (Environment.GetEnvironmentVariable("POINT_TAKEN_TEST_MIC") is { Length: > 0 } testMic) capture = new FileMic(testMic);
+        else
+        {
+            var device = new MMDeviceEnumerator().GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
+            capture = new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: 50);
+        }
         format = capture.WaveFormat;
-        archive = new WaveFileWriter(archivePath, WaveFormat.CreateIeeeFloatWaveFormat(format.SampleRate, format.Channels));
+        archive = new WaveFileWriter(archivePath, new WaveFormat(format.SampleRate, 16, 1));
         if (livePcmPath != null)
         {
             LivePcmPath = livePcmPath;
@@ -70,15 +80,27 @@ public sealed class BoardAudio : IDisposable
         };
         capture.RecordingStopped += (_, e) =>
         {
+            capturing = false;
             stopped.Set();
             // a stop we asked for is not an interruption
             if (e.Exception != null && !stopping) OnFailure?.Invoke("麦克风中断：" + e.Exception.Message);
         };
         capture.StartRecording();
+        capturing = true;
         started = true;
     }
 
-    public void SetPaused(bool value) => paused = value;
+    public void SetPaused(bool value)
+    {
+        // the gap goes in the queue, after whatever was recorded before the pause
+        if (paused && !value && started) { try { queue.TryAdd(Array.Empty<byte>()); } catch (InvalidOperationException) { } }
+        paused = value;
+    }
+
+    const double GapSeconds = PointTaken.Core.BoardTranscript.TakeGap;
+    readonly List<double> breaks = new();
+    /// the recording's seconds where a take begins after a pause (each after its gap of silence)
+    public List<double> Breaks { get { lock (lockObj) return breaks.ToList(); } }
 
     /// Converts one capture buffer to float samples whatever the device format is.
     float[] ToFloats(byte[] data)
@@ -119,15 +141,29 @@ public sealed class BoardAudio : IDisposable
         var tick = 0;
         foreach (var data in queue.GetConsumingEnumerable())
         {
-            var samples = ToFloats(data);
             var channels = format!.Channels;
+            float[] samples;
+            if (data.Length == 0)
+            {
+                // a take resumes: quiet between it and the one before — the room's own hiss, not digital zeros: where
+                // zeros give way to the room again the VAD hears a sound start, and the models wrote "Yeah." / "嗯。"
+                // for it (measured on a silent take: nothing with the hiss)
+                lock (lockObj) if (framesWritten == 0) continue;
+                samples = RoomTone((int)(format.SampleRate * GapSeconds), channels);
+            }
+            else samples = ToFloats(data);
             var frames = samples.Length / channels;
+            var mono = Mono(samples, frames, channels);
+            if (data.Length > 0) Listen(mono, frames);
+            // NAudio writes 16-bit samples without clamping: an over-full peak would wrap round
+            for (var i = 0; i < frames; i++) mono[i] = Math.Clamp(mono[i], -1f, 1f);
             try
             {
                 lock (lockObj)
                 {
-                    archive?.WriteSamples(samples, 0, frames * channels);
+                    archive?.WriteSamples(mono, 0, frames);
                     framesWritten += frames;
+                    if (data.Length == 0) breaks.Add(framesWritten / (double)format.SampleRate);
                 }
             }
             catch (Exception e)
@@ -142,12 +178,43 @@ public sealed class BoardAudio : IDisposable
                 for (var i = 0; i < frames; i++) { var v = samples[i * channels]; sum += v * v; }
                 OnLevel?.Invoke((float)Math.Sqrt(sum / frames));
             }
-            if (livePcm != null && resampler != null && frames > 0) WriteLive(samples, frames, channels);
+            if (livePcm != null && resampler != null && frames > 0) WriteLive(mono, frames);
         }
     }
 
-    void WriteLive(float[] samples, int frames, int channels)
+    /// the room's noise floor (RMS): the quietest buffers heard, rising only slowly with louder ones
+    double floor = double.NaN;
+    readonly Random hiss = new(7);
+
+    void Listen(float[] mono, int frames)
     {
+        if (frames == 0) return;
+        double sum = 0;
+        for (var i = 0; i < frames; i++) sum += mono[i] * mono[i];
+        var rms = Math.Sqrt(sum / frames);
+        if (rms < 1e-5) return;              // a driver's buffer of zeros is no measure of the room
+        floor =double.IsNaN(floor) || rms < floor ? rms : floor + (rms - floor) * 0.002;
+    }
+
+    /// `frames` of noise at the room's level (-80 to -40 dBFS), the same in every channel, so the gap sounds like the
+    /// quiet around it once mixed to mono.
+    float[] RoomTone(int frames, int channels)
+    {
+        var level = Math.Clamp(double.IsNaN(floor) ? 0.0005 : floor, 0.0001, 0.01);
+        var r = new float[frames * channels];
+        for (var f = 0; f < frames; f++)
+        {
+            // Box–Muller: a normal sample from two uniform ones
+            double u = 1 - hiss.NextDouble(), v = hiss.NextDouble();
+            var s = (float)(Math.Sqrt(-2 * Math.Log(u)) * Math.Cos(2 * Math.PI * v) * level);
+            for (var c = 0; c < channels; c++) r[f * channels + c] = s;
+        }
+        return r;
+    }
+
+    static float[] Mono(float[] samples, int frames, int channels)
+    {
+        if (channels == 1) return (float[])samples.Clone();
         var mono = new float[frames];
         for (var i = 0; i < frames; i++)
         {
@@ -155,6 +222,11 @@ public sealed class BoardAudio : IDisposable
             for (var c = 0; c < channels; c++) s += samples[i * channels + c];
             mono[i] = s / channels;
         }
+        return mono;
+    }
+
+    void WriteLive(float[] mono, int frames)
+    {
         var need = resampler!.ResamplePrepare(frames, 1, out var inBuf, out var inOff);
         Array.Copy(mono, 0, inBuf, inOff, Math.Min(need, frames));
         var outMax = frames * 16000 / format!.SampleRate + 64;
@@ -228,4 +300,44 @@ public sealed class BoardAudio : IDisposable
         }
         catch { return false; }
     }
+}
+
+/// A WAV file played in real time, 50 ms at a time, as if it were the microphone (POINT_TAKEN_TEST_MIC); silence after
+/// its end. Only for tests.
+sealed class FileMic : IWaveIn
+{
+    readonly WaveFileReader reader;
+    Thread? thread;
+    volatile bool running;
+    public WaveFormat WaveFormat { get => reader.WaveFormat; set { } }
+    public event EventHandler<WaveInEventArgs>? DataAvailable;
+    public event EventHandler<StoppedEventArgs>? RecordingStopped;
+
+    public FileMic(string path) { reader = new WaveFileReader(path); }
+
+    public void StartRecording()
+    {
+        running = true;
+        thread = new Thread(() =>
+        {
+            var chunk = reader.WaveFormat.AverageBytesPerSecond / 20 / reader.WaveFormat.BlockAlign * reader.WaveFormat.BlockAlign;
+            var buffer = new byte[chunk];
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            long sent = 0;
+            while (running)
+            {
+                var n = reader.Read(buffer, 0, chunk);
+                if (n < chunk) Array.Clear(buffer, n, chunk - n);
+                DataAvailable?.Invoke(this, new WaveInEventArgs(buffer, chunk));
+                sent += chunk;
+                var due = sent * 1000.0 / reader.WaveFormat.AverageBytesPerSecond - clock.Elapsed.TotalMilliseconds;
+                if (due > 0) Thread.Sleep((int)due);
+            }
+            RecordingStopped?.Invoke(this, new StoppedEventArgs());
+        }) { IsBackground = true, Name = "point-taken test microphone" };
+        thread.Start();
+    }
+
+    public void StopRecording() => running = false;
+    public void Dispose() { running = false; thread?.Join(2000); reader.Dispose(); }
 }

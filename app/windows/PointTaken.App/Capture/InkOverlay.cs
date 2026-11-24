@@ -23,7 +23,7 @@ public sealed class InkOverlay : Window
     public double LineWidth { get; }
 
     readonly Canvas canvas = new();
-    readonly Border edge;
+    readonly Grid edge;
     readonly Ellipse halo;
     readonly Border flash;
     InkStroke? stroke;
@@ -51,12 +51,8 @@ public sealed class InkOverlay : Window
         Focusable = false;
         Title = "Point Taken ink";
 
-        edge = new Border
-        {
-            BorderBrush = new SolidColorBrush(Color.FromArgb(190, 0xFF, 0x5C, 0x3D)), BorderThickness = new Thickness(3),
-            Opacity = 0, IsHitTestVisible = false,
-            Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = InkGeometry.Markup, BlurRadius = 18, ShadowDepth = 0, Opacity = 0.9 },
-        };
+        edge = Glow();
+        edge.Opacity = 0;
         halo = new Ellipse
         {
             Width = 26, Height = 26, Stroke = InkGeometry.MarkupBrush, StrokeThickness = 2,
@@ -82,14 +78,16 @@ public sealed class InkOverlay : Window
         };
         // moving onto a display with another scale makes WPF resize the window by that scale: cover the display again
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(Place);
-        MouseLeftButtonDown += (_, e) => { if (penOn) { Begin(ToPt(e.GetPosition(canvas))); CaptureMouse(); e.Handled = true; } };
+        MouseLeftButtonDown += (_, e) => { if (penOn && !hookDriven) { Begin(ToPt(e.GetPosition(canvas))); CaptureMouse(); e.Handled = true; } };
+        // a stroke the hook started takes moves from either side: the window's own (it is under the pointer now) and
+        // the hook's (any move the window misses); the same point twice adds nothing
         MouseMove += (_, e) =>
         {
             var p = e.GetPosition(canvas);
             if (penOn) MoveHalo(p, true);
             if (stroke != null) Move(ToPt(p));
         };
-        MouseLeftButtonUp += (_, e) => { if (stroke != null) { ReleaseMouseCapture(); End(); e.Handled = true; } };
+        MouseLeftButtonUp += (_, e) => { if (stroke != null && !hookDriven) { ReleaseMouseCapture(); End(); e.Handled = true; } };
         MouseLeave += (_, _) => halo.Visibility = Visibility.Hidden;
     }
 
@@ -126,6 +124,62 @@ public sealed class InkOverlay : Window
         if (!on) halo.Visibility = Visibility.Hidden;
         else if (Native.GetCursorPos(out var c) && Display.Contains(c.X, c.Y))
             MoveHalo(new Point((c.X - Display.X) / Display.Scale, (c.Y - Display.Y) / Display.Scale), true);
+    }
+
+    /// The screen's glowing edge while the pen is on: a solid line, and inside it a glow fading out over 16 px (a
+    /// gradient on each side). No blur effect: in a full-screen transparent window WPF draws an effect in software
+    /// through screen-sized buffers — the pen turning on cost 70–80 MB with one (10-minute sessions; 10–40 MB without).
+    public static Grid Glow()
+    {
+        const double reach = 16;
+        Rectangle Fade(Point from, Point to, HorizontalAlignment h, VerticalAlignment v, bool across) => new()
+        {
+            Width = across ? double.NaN : reach, Height = across ? reach : double.NaN, HorizontalAlignment = h, VerticalAlignment = v,
+            IsHitTestVisible = false,
+            Fill = new LinearGradientBrush(new GradientStopCollection
+            {
+                new GradientStop(Color.FromArgb(120, 0xFF, 0x5C, 0x3D), 0), new GradientStop(Color.FromArgb(40, 0xFF, 0x5C, 0x3D), 0.4),
+                new GradientStop(Color.FromArgb(0, 0xFF, 0x5C, 0x3D), 1),
+            }, from, to),
+        };
+        var glow = new Grid { IsHitTestVisible = false };
+        glow.Children.Add(Fade(new Point(0, 0), new Point(0, 1), HorizontalAlignment.Stretch, VerticalAlignment.Top, true));
+        glow.Children.Add(Fade(new Point(0, 1), new Point(0, 0), HorizontalAlignment.Stretch, VerticalAlignment.Bottom, true));
+        glow.Children.Add(Fade(new Point(0, 0), new Point(1, 0), HorizontalAlignment.Left, VerticalAlignment.Stretch, false));
+        glow.Children.Add(Fade(new Point(1, 0), new Point(0, 0), HorizontalAlignment.Right, VerticalAlignment.Stretch, false));
+        glow.Children.Add(new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromArgb(190, 0xFF, 0x5C, 0x3D)), BorderThickness = new Thickness(3), IsHitTestVisible = false,
+        });
+        return glow;
+    }
+
+    public bool PenOn => penOn;
+    public IntPtr Handle => hwnd;
+
+    /// a stroke the mouse hook feeds (its press never reached any window): see BoardSession.LeftButton
+    bool hookDriven;
+    Point FromScreen(int x, int y) => new((x - Display.X) / Display.Scale, (y - Display.Y) / Display.Scale);
+
+    public void BeginFromHook(int x, int y)
+    {
+        hookDriven = true;
+        var p = FromScreen(x, y);
+        MoveHalo(p, true);
+        Begin(ToPt(p));
+    }
+
+    public void MoveFromHook(int x, int y)
+    {
+        var p = FromScreen(x, y);
+        MoveHalo(p, penOn);
+        Move(ToPt(p));
+    }
+
+    public void EndFromHook()
+    {
+        hookDriven = false;
+        End();
     }
 
     void MoveHalo(Point p, bool show)

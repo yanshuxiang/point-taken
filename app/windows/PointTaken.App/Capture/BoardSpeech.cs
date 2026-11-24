@@ -14,6 +14,18 @@ public static class BoardTranscription
     public static string Selected => Config.Shared.GetString("record.board.transcriptionModel") is { Length: > 0 } m && m != "board-apple-speech" ? m : DefaultModel;
     public static void Select(string id) => Config.Shared.Set("record.board.transcriptionModel", id);
 
+    /// 设置 → 通用 → 识别语言 as the models' language code. Given to the model, not left for it to guess: a guessing
+    /// model took short or accented pieces for another language (an English "Okay, hi guys" came back as オケは外し).
+    public static string? LanguageFor(string? locale) => locale?.Split('-', '_')[0].ToLowerInvariant() switch
+    {
+        "zh" => "zh", "en" => "en", "ja" => "ja", "ko" => "ko", "yue" => "yue",
+        _ => null,
+    };
+
+    /// the language a record was made in (its 转写状态.json), else the current setting
+    static string? LanguageOf(string directory) =>
+        LanguageFor(Json.String(Json.ReadObject(Path.Combine(directory, "转写状态.json"))?["locale"]) ?? BoardSession.Locale);
+
     /// The record's audio as a 16 kHz mono 16-bit WAV, which the scripts read without ffmpeg: the one the live
     /// captions left, else made from their PCM (a quit cut them short), else resampled from the original recording
     /// (no captions ran). The original itself is never changed.
@@ -42,7 +54,9 @@ public static class BoardTranscription
         try
         {
             var audio = await Task.Run(() => AudioFor(directory), cancel);
-            var o = await ScriptRunner.CallAsync("transcribe.py", new[] { "note", audio, "--model-id", model, "--segments", "--no-download" },
+            var args = new List<string> { "note", audio, "--model-id", model, "--segments", "--no-download" };
+            if (LanguageOf(directory) is { } language) args.AddRange(new[] { "--language", language });
+            var o = await ScriptRunner.CallAsync("transcribe.py", args.ToArray(),
                                                  TimeSpan.FromSeconds(590), cancel);
             if (Json.String(o["model"]) != model || Json.String(o["text"]) is not { } text || o["segments"] is not JsonArray rows || Json.Bool(o["looped"]) == true)
             {
@@ -98,7 +112,11 @@ public sealed class BoardSpeech
     bool audioArchiveIncomplete;
     public bool HasReliableAudioTimeline => !audioArchiveIncomplete && !(audio?.ArchiveIncomplete ?? false);
     public double? AudioSeconds => HasReliableAudioTimeline ? (audio?.Seconds ?? savedAudioSeconds) : null;
-    public bool IsRecording => running && !paused && audio?.Running == true;
+    public bool IsRecording => running && !paused && !Muted && audio?.Running == true;
+    /// the microphone turned off while the session goes on (the capsule's 麦克风): nothing is recorded or recognised
+    public bool Muted { get; private set; }
+    /// where each take after the first begins in the recording (seconds), for the final text's paragraphs
+    List<double> takeBreaks = new();
     public string PageText => transcript.PageText;
     public string FullText => transcript.Text;
 
@@ -145,7 +163,7 @@ public sealed class BoardSpeech
         persistedTranscript = null;
         audioArchiveIncomplete = false;
         TimedSegments = new(); savedAudioSeconds = null;
-        finishedLive = null; paused = false; finalizing = false; skipFileFinalization = false;
+        finishedLive = null; paused = false; Muted = false; takeBreaks = new(); finalizing = false; skipFileFinalization = false;
         FinalTranscriptVerified = false; ArchiveWarning = null;
         Persist();
         PersistState("recording");
@@ -159,7 +177,7 @@ public sealed class BoardSpeech
         LiveSpeech? source = null;
         try
         {
-            source = new LiveSpeech(finalModel, dir, ui);
+            source = new LiveSpeech(finalModel, dir, ui, BoardTranscription.LanguageFor(locale));
             var id = liveID;
             source.OnText = (words, final) => { if (id != liveID) return; transcript.Update(words, final); Changed(); };
             source.OnReady = () => { if (id == liveID && running && !paused) Set(new Status(StatusKind.Listening)); };
@@ -198,14 +216,23 @@ public sealed class BoardSpeech
         if (source != null) { live = source; Set(new Status(StatusKind.Starting)); source.Start(); }
     }
 
-    public void SetPaused(bool value)
+    public void SetPaused(bool value) { paused = value; Gate(); }
+
+    public void SetMuted(bool value) { Muted = value; Gate(); }
+
+    /// The microphone's samples go on to the recording and the captions unless paused or muted. A take that ends
+    /// closes its text: the next words start a new paragraph.
+    void Gate()
     {
-        paused = value;
-        audio?.SetPaused(value);
-        live?.SetPaused(value);
-        if (value) Set(new Status(StatusKind.Off, "已暂停"));
+        var off = paused || Muted;
+        if (off) transcript.Break();
+        audio?.SetPaused(off);
+        live?.SetPaused(off);
+        if (paused) Set(new Status(StatusKind.Off, "已暂停"));
+        else if (Muted) Set(new Status(StatusKind.Off));    // the user's choice, not a warning: the capsule says it
         else if (running)
             Set(live?.Healthy == true ? new Status(StatusKind.Listening) : new Status(StatusKind.Off, "所选模型实时字幕不可用，不影响录音。"));
+        Changed();
     }
 
     public string Cut() { var w = transcript.MarkPage(); Changed(); return w; }
@@ -236,6 +263,7 @@ public sealed class BoardSpeech
             ui.BeginInvoke(() =>
             {
                 savedAudioSeconds = a?.Seconds;
+                takeBreaks = a?.Breaks ?? new();
                 if (a?.ArchiveIncomplete == true) audioArchiveIncomplete = true;
                 audio = null;
                 FinishAudioStop();
@@ -310,9 +338,25 @@ public sealed class BoardSpeech
     void ApplyFileTranscript(string text, List<BoardSpeechSegment> segments)
     {
         if (text.Trim().Length == 0 && FullText.Length > 0) { ArchiveWarning = "完整转写没有返回文字。" + KeptNote; return; }
-        transcript.ReplaceWithFileTranscript(text);
         TimedSegments = segments.Where(s => s.Valid).ToList();
+        // takes recorded apart stay apart: an empty line where each began
+        transcript.ReplaceWithFileTranscript(takeBreaks.Count > 0 && TimedSegments.Count > 0 ? BoardTranscript.WithTakes(TimedSegments, takeBreaks) : text);
         FinalTranscriptVerified = true;
+    }
+
+    /// The captions' raw 16 kHz copy, once the same samples are in 实时语音/full-16k.wav: one copy is enough (the record
+    /// keeps the original recording, and the 16 kHz WAV that History's 重新转写 reads without converting).
+    void DropCaptionAudio()
+    {
+        if (directory is not { } dir) return;
+        var live = Path.Combine(dir, "实时语音");
+        var wav = Path.Combine(live, "full-16k.wav");
+        // only when the WAV holds every sample of it (a WAV cut short by a full disk would otherwise be all that is left)
+        var pcm = Path.Combine(live, "audio.pcm");
+        try { if (File.Exists(wav) && File.Exists(pcm) && new FileInfo(wav).Length >= new FileInfo(pcm).Length + 44) File.Delete(pcm); }
+        catch { /* kept: nothing depends on it being gone */ }
+        // the captions' stop / pause markers have done their work
+        foreach (var marker in new[] { "stop", "paused" }) { try { File.Delete(Path.Combine(live, marker)); } catch { } }
     }
 
     void PersistState(string state)
@@ -330,6 +374,7 @@ public sealed class BoardSpeech
 
     void FinishFinalization()
     {
+        DropCaptionAudio();
         OnText?.Invoke(PageText);
         Persist(() =>
         {

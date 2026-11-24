@@ -91,7 +91,7 @@ public sealed class BoardSession
         clock = new BoardCaptureClock(Uptime.Now);
         nextMarkNumber = 1; strokeStart = null;
         screenWarning = null;
-        originalPrints.Clear();
+        originalPrints.Clear(); crops.Clear();
         live = null;
         selectedTool = null;
         ResumeStartHotkey?.Invoke();   // released while recording
@@ -147,6 +147,7 @@ public sealed class BoardSession
         };
         screenFeed.OnKeyDown = vk => holdKeys.KeyPressed(vk);
         screenFeed.OnWheel = () => holdKeys.Interrupt();
+        screenFeed.OnLeftButton = LeftButton;
         screenFeed.OnTransition = (old, next, scrolling) => Transition(old, next, scrolling);
         screenFeed.OnLeave = frame => { AutoPage(frame); KeepSpoken(frame, speech.FullText.Length); };
         screenFeed.OnFailure = error => { screenWarning = "自动留页不可用：" + error; Refresh(); };
@@ -161,7 +162,7 @@ public sealed class BoardSession
         ticker?.Stop(); ticker = null;
         slowTicker?.Stop(); slowTicker = null;
         screenFeed.Stop();
-        penOn = false; selectedTool = null;
+        penOn = false; selectedTool = null; hookStroke = null;
         holdKeys.Stop();
         foreach (var o in overlays) o.Close();
         overlays.Clear();
@@ -228,6 +229,10 @@ public sealed class BoardSession
             Shape(InkTool.box, Icons.Rectangle, "矩形"),
             Shape(InkTool.ellipse, Icons.Circle, "圆圈"),
             new("撤销", Icons.Undo, "撤销上一笔", Undo),
+            new("截图", Icons.Camera, CaptureSettings.WholeScreen ? "把现在的整个屏幕存成一页（不用画）" : "把现在最前面的窗口存成一页（不用画）", NextPage),
+            new(speech.Muted ? "打开麦克风" : "关闭麦克风", speech.Muted ? Icons.MicSlash : Icons.Mic,
+                speech.Muted ? "麦克风已关：画的照常记，说的话不录。点一下接着录，新的一段另起一段文字" : "关掉麦克风，只记画的；再打开时另起一段录音和文字",
+                ToggleMic, On: speech.Muted),
             new(Paused ? "继续" : "暂停", Paused ? Icons.PlayFill : Icons.PauseFill, Paused ? "继续录音" : "暂停录音（暂停期间不录音、不截图）", TogglePause, On: Paused, Filled: true),
             new("完成", null, "结束录音，打开检查窗口", Finish, Primary: true),
         });
@@ -258,6 +263,15 @@ public sealed class BoardSession
         ConfigureControls(); Refresh();
     }
 
+    /// The microphone off while marking goes on: what is drawn is kept, nothing said is recorded. Turned on again, the
+    /// recording and its text carry on as a new take (a paragraph of its own).
+    void ToggleMic()
+    {
+        if (!Active || busy || Paused) return;
+        speech.SetMuted(!speech.Muted);
+        ConfigureControls(); Refresh();
+    }
+
     void SyncPen()
     {
         if (!Active) return;
@@ -269,6 +283,42 @@ public sealed class BoardSession
         penOn = on; penDisplay = display;
         // a display's pen waits for that display's clean frame: a stroke always has pixels to keep
         foreach (var o in overlays) o.SetPen(on && o.Display.Key == display);
+    }
+
+    /// a stroke started through the mouse hook (BoardSession.LeftButton): the overlay it is drawn on
+    InkOverlay? hookStroke;
+
+    /// The left button, before any app sees it. With a hold-to-draw key down the press is the pen's at once — not
+    /// after the hold settles (HoldKeys.Settle): a Ctrl+drag must never drag a picture, a file or text in the app below.
+    /// Its moves are passed on (the cursor moves as usual); the press and the release are kept from the app.
+    bool LeftButton(int msg, int x, int y)
+    {
+        if (msg == Interop.Native.WM_MOUSEMOVE) { hookStroke?.MoveFromHook(x, y); return false; }
+        if (msg == Interop.Native.WM_LBUTTONUP)
+        {
+            if (hookStroke is not { } h) return false;
+            hookStroke = null;
+            h.EndFromHook();
+            return true;
+        }
+        // a press while a hook stroke is still open: its release never came by (a UAC prompt or another hook took it).
+        // That stroke ends here, or the pen would wait for it forever
+        if (hookStroke is { } stale) { hookStroke = null; stale.EndFromHook(); }
+        if (!Active || Paused || busy || review != null) return false;
+        if (holdKeys.Pressed() is not { } tool) return false;
+        // a window of ours under the pointer (the capsule, Settings) takes its own click
+        var under = Native.WindowFromPoint(new Native.POINT { X = x, Y = y });
+        Native.GetWindowThreadProcessId(under, out var pid);
+        if (pid == (uint)Environment.ProcessId && !overlays.Any(o => o.Handle == under)) return false;
+        var overlay = overlays.FirstOrDefault(o => o.Display.Contains(x, y));
+        // a pen already on takes the click itself; a display whose picture isn't in yet can't keep a stroke
+        if (overlay == null || overlay.PenOn || screenFeed.Current?.DisplayKey != overlay.Display.Key) return false;
+        if (!holdKeys.HoldNow(tool)) return false;
+        SyncPen();
+        if (!overlay.PenOn) return false;
+        hookStroke = overlay;
+        overlay.BeginFromHook(x, y);
+        return true;
     }
 
     void SlowTick()
@@ -292,7 +342,7 @@ public sealed class BoardSession
             page.Marks.RemoveAt(page.Marks.Count - 1);
             if (page.MarkEvidence.Count > 0) page.MarkEvidence.RemoveAt(page.MarkEvidence.Count - 1);
             var overlay = overlays.FirstOrDefault(o => o.Display.Key == l.frame.DisplayKey);
-            overlay?.Load(page.Marks);
+            overlay?.Load(OnDisplay(page, l.frame.Image));
             if (page.Marks.Count == 0 && !page.ManuallySaved)
             {
                 Pages.RemoveAt(l.index);
@@ -300,6 +350,7 @@ public sealed class BoardSession
                 overlay?.Clear();
                 var retained = BoardRecord.Files(Pages).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 BoardFileWriter.Remove(page.AllFiles.Where(f => !retained.Contains(f)));
+                if (page.Original is { } o) crops.Remove(o);
             }
             else Redraw(page, l.frame.Image);
             UpdateTray(); WriteNotes();
@@ -308,6 +359,7 @@ public sealed class BoardSession
         overlays.OrderByDescending(o => o.LastStrokeAt).FirstOrDefault()?.Undo();
     }
 
+    /// 截图: the screen now (its window in front, or all of it — 设置 → 通用 → 截图范围) becomes a page, marked or not.
     void NextPage()
     {
         if (!Active || busy || Paused || review != null) return;
@@ -318,11 +370,34 @@ public sealed class BoardSession
             {
                 SelectTool(null);
                 overlays.FirstOrDefault(o => o.Display.Key == screenFeed.Current?.DisplayKey)?.Flash();
-                Capsule.Toast($"第 {Pages.Count} 页已存，切到下一页接着标");
+                Capsule.Toast($"已截图，存为第 {Pages.Count} 页");
             }
-            else Capsule.Toast("这一页还没画也没说，先标一下再点“存页”");
+            else Capsule.Toast("屏幕画面还没准备好，稍等一下再截");
             Refresh();
         });
+    }
+
+    // ── a page's picture: the part of its screen it was cut from ──
+
+    /// the part of its display each of this session's pages is cut from (by its original's path); absent: the whole
+    /// display. A page's marks are in its picture's 0–1 coordinates; the overlay draws in its display's.
+    readonly Dictionary<string, PixelRect> crops = new(StringComparer.OrdinalIgnoreCase);
+
+    PixelRect? CropOf(BoardPage page) => page.Original is { } o && crops.TryGetValue(o, out var c) ? c : null;
+    Pixels PagePicture(BoardPage page, Pixels screen) => screen.Crop(CropOf(page));
+    List<List<double[]>> OnDisplay(BoardPage page, Pixels screen) =>
+        page.Marks.Select(m => WindowCrop.ToDisplay(m, CropOf(page), screen.Width, screen.Height)).ToList();
+    List<double[]> OnPage(BoardPage page, IEnumerable<double[]> mark, Pixels screen) =>
+        WindowCrop.ToPage(mark, CropOf(page), screen.Width, screen.Height);
+
+    /// The page is cut again from its screen, as `next` (null: the whole display); its marks follow.
+    void Recut(BoardPage page, Pixels screen, PixelRect? next)
+    {
+        if (page.Original is not { } original) return;
+        var onDisplay = OnDisplay(page, screen);
+        if (next is { } n) crops[original] = n; else crops.Remove(original);
+        page.Marks = onDisplay.Select(m => OnPage(page, m, screen)).ToList();
+        BoardFileWriter.Png(PagePicture(page, screen), original);
     }
 
     // ── pages ──
@@ -347,8 +422,8 @@ public sealed class BoardSession
 
     bool SamePicture(BoardFrameFingerprint a, BoardFrameFingerprint b, double within = 0.002) => screenFeed.Motion.Distance(a, b) < within;
 
-    /// Files a stroke: onto the page being marked when the screen still shows it, else as a new page. A stroke on a
-    /// part that moves by itself (a carousel) must sit on the picture it was drawn on.
+    /// Files a stroke (0–1 on its display): onto the page being marked when the screen still shows it, else as a new
+    /// page. A stroke on a part that moves by itself (a carousel) must sit on the picture it was drawn on.
     void Place(List<double[]> stroke, BoardMarkEvidence evidence, ScreenFrame frame, InkOverlay? overlay)
     {
         var motion = screenFeed.Motion;
@@ -357,7 +432,7 @@ public sealed class BoardSession
         var startsNewPage = !sameViewport;
         if (onChangedMovingPart && live is { } l1)
         {
-            var earlier = Pages[l1.index].Marks.Any(m => motion.Touches(m));
+            var earlier = OnDisplay(Pages[l1.index], l1.frame.Image).Any(m => motion.Touches(m));
             startsNewPage = earlier || !RefreshPicture(l1.index, frame);
         }
         timeline?.Observe(frame.Scene, frame.AppName, frame.Title, frame.Fingerprint, startsNewPage, Moment);
@@ -365,9 +440,17 @@ public sealed class BoardSession
         if (!startsNewPage && live is { } l && l.index < Pages.Count)
         {
             var page = Pages[l.index];
-            page.Marks.Add(stroke);
+            var screen = l.frame.Image;
+            var mark = OnPage(page, stroke, screen);
+            if (!WindowCrop.Inside(mark) && CropOf(page) is { } cut)
+            {
+                // drawn beyond the window the page was cut to: the page takes in the window(s) under this mark too
+                Recut(page, screen, WindowCrop.Join(cut, WindowCrop.For(frame, new[] { stroke }), screen.Width, screen.Height));
+                mark = OnPage(page, stroke, screen);
+            }
+            page.Marks.Add(mark);
             page.MarkEvidence.Add(evidence);
-            Redraw(page, live.Value.frame.Image);
+            Redraw(page, screen);
             WriteNotes();
         }
         else
@@ -376,16 +459,16 @@ public sealed class BoardSession
             var metadata = new List<BoardMarkEvidence>();
             if (live is { } old && sameViewport && !onChangedMovingPart && old.index < Pages.Count)
             {
-                marks.AddRange(Pages[old.index].Marks);
+                marks.AddRange(OnDisplay(Pages[old.index], old.frame.Image));
                 metadata.AddRange(Pages[old.index].MarkEvidence);
             }
             marks.Add(stroke); metadata.Add(evidence);
-            var index = Save(frame.Image, frame, marks, included: true, metadata, capturedAt: clock.Elapsed(frame.CapturedAt), fresh: onChangedMovingPart);
+            var index = Save(frame, marks, included: true, metadata, capturedAt: clock.Elapsed(frame.CapturedAt), fresh: onChangedMovingPart);
             if (index is { } i)
             {
                 SealPage(clearInk: false);
                 live = (i, frame);
-                overlay?.Load(Pages[i].Marks);
+                overlay?.Load(OnDisplay(Pages[i], frame.Image));
             }
         }
         wordsAtScreen = speech.FullText.Length; pagesAtScreen = Pages.Count;
@@ -397,18 +480,20 @@ public sealed class BoardSession
     {
         var page = Pages[index];
         if (page.Original is not { } original || page.Components.Count > 0 || live is not { } l || l.frame.Image.Width != frame.Image.Width || l.frame.Image.Height != frame.Image.Height) return false;
-        BoardFileWriter.Png(frame.Image, original);
+        BoardFileWriter.Png(PagePicture(page, frame.Image), original);
         originalPrints[original] = (frame.Fingerprint, frame.Image.Width, frame.Image.Height);
         live = (index, frame);
         Redraw(page, frame.Image);
         return true;
     }
 
-    void Redraw(BoardPage page, Pixels image)
+    /// The page's marked picture and its thumbnail, from its screen `screen` (cut as the page is).
+    void Redraw(BoardPage page, Pixels screen)
     {
         if (page.Images.Count == 0) return;
-        BoardFileWriter.Marked(image, page, page.Images[0]);
-        using var thumb = MarkRenderer.Render(image, page.Marks, page.MarkEvidence, page.LineWidth, 96);
+        var picture = PagePicture(page, screen);
+        BoardFileWriter.Marked(picture, page, page.Images[0]);
+        using var thumb = MarkRenderer.Render(picture, page.Marks, page.MarkEvidence, page.LineWidth, 96);
         record?.SetThumb(page, MarkRenderer.ToSource(thumb));
     }
 
@@ -446,22 +531,24 @@ public sealed class BoardSession
         if (overlay.NormalizedStrokes.Count == 0) return;
         var marks = overlay.NormalizedStrokes.Select(m => m.ToList()).ToList();
         var evidence = marks.Select(_ => new BoardMarkEvidence(nextMarkNumber++)).ToList();
-        if (Save(frame.Image, frame, marks, true, evidence, capturedAt: clock.Elapsed(frame.CapturedAt)) != null)
+        if (Save(frame, marks, true, evidence, capturedAt: clock.Elapsed(frame.CapturedAt)) != null)
         {
             overlay.Clear(); SelectTool(null); Refresh();
         }
     }
 
     /// A screen that was talked over but not marked: kept as a page, unchecked (it goes to the AI only if checked in
-    /// the review), so the words said there have their picture.
+    /// the review), so the words said there have their picture. Only with 设置 → 通用 → 没画的画面也留页 on: by default
+    /// only what is marked, or saved with 截图, becomes a page.
     void KeepSpoken(ScreenFrame frame, int wordCount)
     {
         try
         {
+            if (!CaptureSettings.KeepSpokenScreens) return;
             var unsaved = live is not { } l || l.frame.DisplayKey != frame.DisplayKey || !SamePicture(l.frame.Fingerprint, frame.Fingerprint);
             if (!Active || Paused || busy || !unsaved || Pages.Count != pagesAtScreen || wordCount - wordsAtScreen < 4) return;
             timeline?.Observe(frame.Scene, frame.AppName, frame.Title, frame.Fingerprint, live != null, Moment);
-            Save(frame.Image, frame, new(), included: false, new(), manual: true, capturedAt: clock.Elapsed(frame.CapturedAt));
+            Save(frame, new(), included: false, new(), manual: true, capturedAt: clock.Elapsed(frame.CapturedAt));
         }
         finally { wordsAtScreen = wordCount; pagesAtScreen = Pages.Count; }
     }
@@ -483,9 +570,9 @@ public sealed class BoardSession
         busy = true;
         if (screenFeed.Current is not { } frame) { WriteNotes(); then(false); return; }
         timeline?.Observe(frame.Scene, frame.AppName, frame.Title, frame.Fingerprint, false, Moment);
-        var marks = live is { } lv && lv.index < Pages.Count ? Pages[lv.index].Marks.ToList() : new();
+        var marks = live is { } lv && lv.index < Pages.Count ? OnDisplay(Pages[lv.index], lv.frame.Image) : new();
         var evidence = live is { } le && le.index < Pages.Count ? Pages[le.index].MarkEvidence.ToList() : new();
-        var kept = Save(frame.Image, frame, marks, true, evidence, manual: true, capturedAt: clock.Elapsed(frame.CapturedAt)) != null;
+        var kept = Save(frame, marks, true, evidence, manual: true, capturedAt: clock.Elapsed(frame.CapturedAt)) != null;
         if (kept) { SealPage(); screenFeed.ResetBoundary(); }
         then(kept);
     }
@@ -500,14 +587,17 @@ public sealed class BoardSession
         return v;
     }
 
-    int? Save(Pixels image, ScreenFrame frame, List<List<double[]>> marks, bool included, List<BoardMarkEvidence> evidence,
+    /// Keeps `frame` as a page with `marks` (0–1 on its display): cut to the windows they are on (WindowCrop), or onto
+    /// a page of the same unchanged screen seen before.
+    int? Save(ScreenFrame frame, List<List<double[]>> marks, bool included, List<BoardMarkEvidence> evidence,
               bool manual = false, double? capturedAt = null, bool fresh = false)
     {
+        var image = frame.Image;
         if (record is not { } rec || (marks.Count == 0 && !manual)) return null;
         var contextIDs = timeline?.CurrentID is { } id ? new List<string> { id } : new List<string>();
         var print = frame.Fingerprint;
         var motion = screenFeed.Motion;
-        // a confidently matched unchanged screen seen again: one picture, all visits
+        // a confidently matched unchanged screen seen again: one picture, all visits (the prints are of whole screens)
         if (!fresh)
         {
             for (var i = 0; i < Pages.Count; i++)
@@ -518,9 +608,12 @@ public sealed class BoardSession
                 if (motion.Distance(old.print, print) >= 0.002) continue;
                 if (marks.Any(m => motion.Touches(m)) && motion.MovingDistance(old.print, print) > 0.01) continue;
                 if (page.Images.Count == 0) continue;
+                // marks beyond that page's window are about another window: not this page
+                var onPage = marks.Select(m => OnPage(page, m, image)).ToList();
+                if (!onPage.All(WindowCrop.Inside)) continue;
                 var known = page.MarkEvidence.Select(e => e.Number).ToHashSet();
                 var before = page.Marks.Count;
-                foreach (var (mark, item) in marks.Zip(evidence))
+                foreach (var (mark, item) in onPage.Zip(evidence))
                     if (!known.Contains(item.Number)) { page.Marks.Add(mark); page.MarkEvidence.Add(item); }
                 page.Included = BoardPageInclusion.After(before, page.Marks.Count, page.Included);
                 page.ManuallySaved |= manual;
@@ -529,6 +622,7 @@ public sealed class BoardSession
                 return i;
             }
         }
+        var crop = marks.Count > 0 ? WindowCrop.For(frame, marks) : WindowCrop.Front(frame);
         var uid = Guid.NewGuid().ToString().ToUpperInvariant();
         var original = Path.Combine(rec.Directory, $"原图-{uid}.png");
         var output = Path.Combine(rec.Directory, $"标注-{uid}.png");
@@ -536,10 +630,12 @@ public sealed class BoardSession
         var width = Math.Max(2, image.Width / Math.Max(1.0, frame.Display.Width / frame.Display.Scale) * 4);
         var newPage = new BoardPage
         {
-            Images = new() { output }, Original = original, Marks = marks, Included = included, Scene = frame.Scene, LineWidth = width,
+            Images = new() { output }, Original = original, Included = included, Scene = frame.Scene, LineWidth = width,
+            Marks = marks.Select(m => WindowCrop.ToPage(m, crop, image.Width, image.Height)).ToList(),
             SourceFrames = new() { original }, ContextIDs = contextIDs, MarkEvidence = evidence, ManuallySaved = manual, CapturedAt = capturedAt,
         };
-        BoardFileWriter.Png(image, original);
+        if (crop is { } c) crops[original] = c;
+        BoardFileWriter.Png(image.Crop(crop), original);
         originalPrints[original] = (print, image.Width, image.Height);
         Pages.Add(newPage);
         Redraw(newPage, image);
@@ -653,6 +749,7 @@ public sealed class BoardSession
             _ => Capsule.Mic.Off,
         };
         if (speech.Current.Kind == BoardSpeech.StatusKind.Off && speech.IsRecording) mic = Capsule.Mic.Live;
-        Capsule.Update(Pages.Count + 1, Paused ? "已暂停 · 语音与画面都已停止记录" : speech.PageText, Paused ? Capsule.Mic.Off : mic, warnings, HotkeySettings.Hold(InkTool.free).ToString());
+        var words = Paused ? "已暂停 · 语音与画面都已停止记录" : speech.Muted && speech.PageText.Trim().Length == 0 ? "麦克风已关 · 只记你画的" : speech.PageText;
+        Capsule.Update(Pages.Count + 1, words, Paused || speech.Muted ? Capsule.Mic.Off : mic, warnings, HotkeySettings.Hold(InkTool.free).ToString());
     }
 }

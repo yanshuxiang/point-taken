@@ -21,7 +21,13 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- WinForms is used only for the tray icon; keep WPF's names unambiguous -->
     <NoWarn>$(NoWarn);CA1416;WFAC010</NoWarn>
+    <!-- a tray app that holds a few screen-sized pictures at a time: the workstation GC without its background thread,
+         and the large-object heap compacted when it fragments, keep its memory near what it actually uses -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
+  </ItemGroup>
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />

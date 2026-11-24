@@ -55,11 +55,11 @@ public static class SelfCheck
         }
         var plain = Make(false, Colors.Lime);
         Pump(400);
-        var withPlain = GdiCapture.Grab(m);
+        var withPlain = GdiCapture.GrabOnce(m);
         plain.Close();
         var ours = Make(true, System.Windows.Media.Color.FromRgb(255, 0, 255));
         Pump(400);
-        var withOurs = GdiCapture.Grab(m);
+        var withOurs = GdiCapture.GrabOnce(m);
         ours.Close();
         int Px(Pixels p, int x, int y) { var i = y * p.Stride + x * 4; return p.Data[i] | p.Data[i + 1] << 8 | p.Data[i + 2] << 16; }
         var cx = (int)(140 * m.Scale); var cy = (int)(140 * m.Scale);
@@ -155,7 +155,7 @@ public static class SelfCheck
         capsule.SetControls(new List<Capsule.Control>
         {
             new("自由画", Icons.Scribble, "", () => { }, On: true), new("矩形", Icons.Rectangle, "", () => { }), new("圆圈", Icons.Circle, "", () => { }),
-            new("撤销", Icons.Undo, "", () => { }), new("暂停", Icons.PauseFill, "", () => { }, Filled: true), new("完成", null, "", () => { }, Primary: true),
+            new("撤销", Icons.Undo, "", () => { }), new("截图", Icons.Camera, "", () => { }), new("关闭麦克风", Icons.Mic, "", () => { }), new("暂停", Icons.PauseFill, "", () => { }, Filled: true), new("完成", null, "", () => { }, Primary: true),
         });
         capsule.SetTray(new System.Windows.Media.Imaging.BitmapSource?[] { null, null });
         capsule.Update(2, "这个邮件通知的开关默认应该关掉，不然大家会被邮件刷屏。保存按钮太小了", Capsule.Mic.Live, new[] { new Capsule.Warning("麦克风未获准，不能保存录音", BoardPermission.Microphone) }, "Ctrl");
@@ -259,6 +259,20 @@ public static class SelfCheck
         Report("render tray-menu", true, $"{menu.ActualWidth:0}x{menu.ActualHeight:0}");
         menu.IsOpen = false; host.Close();
         _ = menuApp;
+        // the pen's glowing screen edge over a light and a dark part of a screen (the overlay itself is never captured)
+        var screen = new System.Windows.Controls.Grid { Width = 640, Height = 360 };
+        screen.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+        screen.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+        var dark = new System.Windows.Controls.Border { Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x1F)) };
+        System.Windows.Controls.Grid.SetColumn(dark, 1);
+        screen.Children.Add(new System.Windows.Controls.Border { Background = System.Windows.Media.Brushes.White });
+        screen.Children.Add(dark);
+        var glow = Capture.InkOverlay.Glow();
+        System.Windows.Controls.Grid.SetColumnSpan(glow, 2);
+        screen.Children.Add(glow);
+        screen.Measure(new Size(640, 360)); screen.Arrange(new Rect(0, 0, 640, 360)); screen.UpdateLayout();
+        Render(screen, Path.Combine(outDir, "pen-edge.png"), 640, 360);
+        Report("render pen-edge", true, "640x360");
         return failures == 0 ? 0 : 1;
     }
 

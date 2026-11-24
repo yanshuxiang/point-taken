@@ -22,6 +22,9 @@ public sealed class ScreenFeed
     public Action<int>? OnKeyDown;
     /// the wheel turned (with a hold-to-draw key down it is Ctrl+wheel for the app, not drawing)
     public Action? OnWheel;
+    /// the left button pressed, moved or released, before any app sees it (physical screen pixels); true keeps a press
+    /// or release from the app (the pen took it: a stroke the hold-to-draw key started)
+    public Func<int, int, int, bool>? OnLeftButton;
 
     public BoardMotionMask Motion { get; } = new();
     public ScreenFrame? Current { get; private set; }
@@ -66,6 +69,10 @@ public sealed class ScreenFeed
     void CaptureLoop(CancellationToken token)
     {
         var failures = 0;
+        using var grabber = new GdiCapture();
+        // the last picture delivered: an unchanged screen reuses it (and its fingerprint) instead of a new buffer —
+        // five full-screen buffers a second otherwise pile up in the large-object heap between collections
+        (string key, Pixels pixels, BoardFrameFingerprint print)? last = null;
         while (!token.IsCancellationRequested)
         {
             var began = Stopwatch.GetTimestamp();
@@ -76,8 +83,11 @@ public sealed class ScreenFeed
                     var display = MonitorInfo.AtCursor();
                     if (display != null)
                     {
-                        var pixels = GdiCapture.Grab(display);
-                        var print = pixels.Fingerprint();
+                        Pixels pixels; BoardFrameFingerprint print;
+                        var previous = last is { } l && l.key == display.Key ? l.pixels : null;
+                        var grabbed = grabber.Grab(display, previous);
+                        if (ReferenceEquals(grabbed, previous) && last is { } same) { pixels = same.pixels; print = same.print; }
+                        else { pixels = grabbed; print = pixels.Fingerprint(); last = (display.Key, pixels, print); }
                         var context = WindowContext.Front();
                         var at = Uptime.Now;
                         Interlocked.Exchange(ref delivering, 1);
@@ -152,6 +162,12 @@ public sealed class ScreenFeed
 
     IntPtr MouseHook(int code, IntPtr wParam, IntPtr lParam)
     {
+        if (code >= 0 && OnLeftButton != null && (int)wParam is Native.WM_LBUTTONDOWN or Native.WM_MOUSEMOVE or Native.WM_LBUTTONUP)
+        {
+            var data = Marshal.PtrToStructure<Native.MSLLHOOKSTRUCT>(lParam);
+            // a press the pen takes (and its release) never reaches the app below: nothing there is clicked or dragged
+            if (OnLeftButton((int)wParam, data.pt.X, data.pt.Y) && (int)wParam != Native.WM_MOUSEMOVE) return new IntPtr(1);
+        }
         if (code >= 0 && !Paused)
         {
             var msg = (int)wParam;
@@ -200,39 +216,69 @@ public sealed class ScreenFeed
     public static bool IsModifier(int vk) => vk is 0x10 or 0x11 or 0x12 or 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5 or 0x5B or 0x5C or 0x14;
 }
 
-/// BitBlt of one display into a top-down 32-bit DIB. Windows marked WDA_EXCLUDEFROMCAPTURE are left out.
-static class GdiCapture
+/// BitBlt of one display into a top-down 32-bit DIB. Windows marked WDA_EXCLUDEFROMCAPTURE are left out. The DIB and
+/// a scratch buffer are kept between grabs (one display size at a time): a grab allocates only when the picture changed.
+sealed class GdiCapture : IDisposable
 {
-    public static Pixels Grab(MonitorInfo m)
+    IntPtr mem, dib, bits, oldBitmap;
+    int width, height;
+    byte[] scratch = Array.Empty<byte>();
+
+    /// The display's picture; `previous` itself when not one pixel differs from it.
+    public Pixels Grab(MonitorInfo m, Pixels? previous = null)
     {
         var screen = Native.GetDC(IntPtr.Zero);
-        var mem = Native.CreateCompatibleDC(screen);
-        var header = new Native.BITMAPINFOHEADER
-        {
-            biSize = (uint)Marshal.SizeOf<Native.BITMAPINFOHEADER>(), biWidth = m.Width, biHeight = -m.Height,
-            biPlanes = 1, biBitCount = 32, biCompression = 0,
-        };
-        var dib = Native.CreateDIBSection(screen, ref header, 0, out var bits, IntPtr.Zero, 0);
-        if (dib == IntPtr.Zero) { Native.DeleteDC(mem); Native.ReleaseDC(IntPtr.Zero, screen); throw new InvalidOperationException("无法读取屏幕"); }
-        var old = Native.SelectObject(mem, dib);
         try
         {
+            if (dib == IntPtr.Zero || width != m.Width || height != m.Height)
+            {
+                Release();
+                mem = Native.CreateCompatibleDC(screen);
+                var header = new Native.BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<Native.BITMAPINFOHEADER>(), biWidth = m.Width, biHeight = -m.Height,
+                    biPlanes = 1, biBitCount = 32, biCompression = 0,
+                };
+                dib = Native.CreateDIBSection(screen, ref header, 0, out bits, IntPtr.Zero, 0);
+                if (dib == IntPtr.Zero) { Release(); throw new InvalidOperationException("无法读取屏幕"); }
+                oldBitmap = Native.SelectObject(mem, dib);
+                width = m.Width; height = m.Height;
+                scratch = new byte[m.Width * m.Height * 4];
+            }
             if (!Native.BitBlt(mem, 0, 0, m.Width, m.Height, screen, m.X, m.Y, Native.SRCCOPY))
                 throw new InvalidOperationException("截图失败");
-            var data = new byte[m.Width * m.Height * 4];
-            Marshal.Copy(bits, data, 0, data.Length);
-            // GDI leaves alpha at 0: make every pixel opaque
-            for (var i = 3; i < data.Length; i += 4) data[i] = 255;
-            return new Pixels(m.Width, m.Height, data);
         }
-        finally
-        {
-            Native.SelectObject(mem, old);
-            Native.DeleteObject(dib);
-            Native.DeleteDC(mem);
-            Native.ReleaseDC(IntPtr.Zero, screen);
-        }
+        finally { Native.ReleaseDC(IntPtr.Zero, screen); }
+        Marshal.Copy(bits, scratch, 0, scratch.Length);
+        Opaque(scratch);
+        if (previous != null && previous.Width == m.Width && previous.Height == m.Height && previous.Data.AsSpan().SequenceEqual(scratch))
+            return previous;
+        return new Pixels(m.Width, m.Height, (byte[])scratch.Clone());
     }
+
+    /// GDI leaves alpha at 0: every pixel opaque (BGRA: the high byte of each little-endian word).
+    static void Opaque(byte[] data)
+    {
+        var words = MemoryMarshal.Cast<byte, uint>(data.AsSpan());
+        var vectors = MemoryMarshal.Cast<uint, System.Numerics.Vector<uint>>(words);
+        var alpha = new System.Numerics.Vector<uint>(0xFF000000u);
+        for (var i = 0; i < vectors.Length; i++) vectors[i] |= alpha;
+        for (var i = vectors.Length * System.Numerics.Vector<uint>.Count; i < words.Length; i++) words[i] |= 0xFF000000u;
+    }
+
+    void Release()
+    {
+        if (mem != IntPtr.Zero && oldBitmap != IntPtr.Zero) Native.SelectObject(mem, oldBitmap);
+        if (dib != IntPtr.Zero) Native.DeleteObject(dib);
+        if (mem != IntPtr.Zero) Native.DeleteDC(mem);
+        dib = mem = bits = oldBitmap = IntPtr.Zero;
+        width = height = 0;
+    }
+
+    public void Dispose() => Release();
+
+    /// One grab, nothing kept (the self-check).
+    public static Pixels GrabOnce(MonitorInfo m) { using var g = new GdiCapture(); return g.Grab(m); }
 }
 
 /// The window in front: its identity (for page boundaries), its app's name and its title. Never a URL: one in a title

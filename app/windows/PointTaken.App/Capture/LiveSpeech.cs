@@ -35,9 +35,13 @@ public sealed class LiveSpeech
 
     public string PcmPath => Path.Combine(Directory, "audio.pcm");
 
-    public LiveSpeech(string model, string sessionDirectory, Dispatcher ui)
+    /// the spoken language passed to the model (zh, en…; null: the model tells)
+    readonly string? language;
+
+    public LiveSpeech(string model, string sessionDirectory, Dispatcher ui, string? language = null)
     {
         Model = model;
+        this.language = language;
         this.ui = ui;
         Directory = Path.Combine(sessionDirectory, "实时语音");
         audioUrl = Path.Combine(sessionDirectory, "原始录音.wav");
@@ -62,7 +66,9 @@ public sealed class LiveSpeech
                 {
                     if (cancelled) return;
                     // the final pass reads a 16 kHz WAV written at stop (no ffmpeg needed for the device's format)
-                    p = ScriptRunner.Start("board_live.py", new[] { Directory, "--model-id", Model, "--audio-file", finalWav }, cwd: Directory);
+                    var args = new List<string> { Directory, "--model-id", Model, "--audio-file", finalWav };
+                    if (language != null) args.AddRange(new[] { "--language", language });
+                    p = ScriptRunner.Start("board_live.py", args.ToArray(), cwd: Directory);
                     process = p;
                 }
                 p.StandardInput.Close();

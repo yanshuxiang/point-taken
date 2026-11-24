@@ -75,6 +75,55 @@ public class TranscriptTests
     }
 
     [Fact]
+    public void NoSpaceAfterAChineseSentenceMark()
+    {
+        Assert.Equal("这里改成红色。按钮太小了。Then this.", BoardTranscript.Join(new[] { "这里改成红色。", "按钮太小了。", "Then this." }));
+        Assert.Equal("First. Second.", BoardTranscript.Join(new[] { "First.", "", "Second." }));
+    }
+
+    [Fact]
+    public void ATakeStartsAParagraph()
+    {
+        var t = new BoardTranscript();
+        t.Update("第一段说的话。", true);
+        t.Break();
+        t.Break();                       // paused right after turning the microphone off: still one break
+        t.Update("第二段。", false);
+        Assert.Equal("第一段说的话。\n\n第二段。", t.Text);
+    }
+
+    [Fact]
+    public void TheEndedTakesLastWordsStayInIt()
+    {
+        var t = new BoardTranscript();
+        t.Update("第一段", false);
+        t.Break();
+        t.Update("第一段说完了。", true);     // the recogniser's final version, after the microphone went off
+        t.Update("第二段", false);
+        Assert.Equal("第一段说完了。\n\n第二段", t.Text);
+    }
+
+    [Fact]
+    public void FinalTextKeepsTakesApart()
+    {
+        var segments = new[]
+        {
+            new BoardSpeechSegment(0.2, 2.0, "先看这里。"), new BoardSpeechSegment(2.1, 4.0, "这个按钮太小。"),
+            new BoardSpeechSegment(5.85, 7.5, "再说下一处。"),        // take 2 after the gap 4.0–6.0, as the VAD pads it
+        };
+        Assert.Equal("先看这里。这个按钮太小。\n\n再说下一处。", BoardTranscript.WithTakes(segments, new[] { 6.0 }));
+        Assert.Equal("先看这里。这个按钮太小。再说下一处。", BoardTranscript.WithTakes(segments, Array.Empty<double>()));
+    }
+
+    [Fact]
+    public void ASpanStartingInTheGapIsTheNewTakes()
+    {
+        // Fun-ASR-Nano is handed whole spans: take 2's starts in the middle of the 2 s gap, take 1's ends there
+        var segments = new[] { new BoardSpeechSegment(0.0, 5.0, "先看这里。"), new BoardSpeechSegment(5.0, 9.0, "再说下一处。") };
+        Assert.Equal("先看这里。\n\n再说下一处。", BoardTranscript.WithTakes(segments, new[] { 6.0 }));
+    }
+
+    [Fact]
     public void DeliveryEditIsExplicit()
     {
         var dir = Directory.CreateTempSubdirectory().FullName;

@@ -18,6 +18,15 @@ public sealed class Pixels
     public byte[] Data { get; }
     public Pixels(int width, int height, byte[] data) { Width = width; Height = height; Data = data; }
 
+    /// A copy of the part `r` (this picture itself when `r` is null or the whole of it).
+    public Pixels Crop(PixelRect? r)
+    {
+        if (r is not { } c || (c.X == 0 && c.Y == 0 && c.W == Width && c.H == Height)) return this;
+        var bytes = new byte[c.W * c.H * 4];
+        for (var y = 0; y < c.H; y++) Buffer.BlockCopy(Data, ((c.Y + y) * Width + c.X) * 4, bytes, y * c.W * 4, c.W * 4);
+        return new Pixels(c.W, c.H, bytes);
+    }
+
     BitmapSource? source;
     /// a frozen WPF image (safe to share across threads)
     public BitmapSource Source

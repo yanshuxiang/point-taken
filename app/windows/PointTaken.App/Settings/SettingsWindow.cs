@@ -204,6 +204,11 @@ public sealed class SettingsWindow : MacWindow
         Section(content, "标注", new[]
         {
             Row("识别语言", "录音时按这种语言识别你说的话", Popup(languages, BoardSession.Locale, id => Config.Shared.Set("record.board.locale", id))),
+            Row("截图范围", "画了标记的那一页截哪一块；胶囊上的「截图」也照这个截",
+                Popup(new[] { ("window", "标记所在的窗口"), ("screen", "整个屏幕") }, CaptureSettings.WholeScreen ? "screen" : "window",
+                      id => CaptureSettings.SetWholeScreen(id == "screen"))),
+            Row("没画的画面也留页", "离开一个说过话、但没画标记的画面时，也截一张存起来（默认不发给 AI）",
+                Mac.Switch(CaptureSettings.KeepSpokenScreens, CaptureSettings.SetKeepSpokenScreens), minHeight: 52),
         });
         var open = Mac.Push("打开文件夹", () => { Directory.CreateDirectory(Paths.Records); Paste.OpenFolder(Paths.Records); });
         Section(content, "记录", new[] { Row("原始录音、完整转写和截图一直保留，手动删除。", Paths.Records, open) });
@@ -269,6 +274,28 @@ public sealed class SettingsWindow : MacWindow
             ((StackPanel)row.Children[^1]).Children.Add(progress);
             rows.Add(row);
         }
+        // SenseVoice is small and quick, and writes more wrong characters: Fun-ASR-Nano, offered next to it, wrote about
+        // 40 % fewer on a 3-minute Chinese test recording (10.4 % → 6.3 %), at ~950 MB and ~2 GB more memory while it runs
+        var accurate = SpeechModels.Models.FirstOrDefault(m => m.Id == AccurateModel && m.RunsHere);
+        if (currentModel == BoardTranscription.DefaultModel && accurate != null)
+        {
+            const string detail = "错字更少（测试录音上约少四成），转写时多占约 2 GB 内存";
+            if (accurate.Installed)
+                rows.Add(Row($"更准确：{accurate.Name}", detail, Mac.Push("改用", () => { BoardTranscription.Select(accurate.Id); Show("模型与 API"); }), Icons.Waveform, 64));
+            else
+            {
+                var progress = Mac.Text("", Mac.Callout, color: Mac.Secondary);
+                var get = Mac.Push("下载并改用", () => { });
+                get.Click += async (_, _) =>
+                {
+                    await Download(accurate.Id, get, progress);
+                    if (SpeechModels.Models.Any(m => m.Id == accurate.Id && m.Installed)) { BoardTranscription.Select(accurate.Id); if (current == "模型与 API") Show("模型与 API"); }
+                };
+                var row = (DockPanel)Row($"更准确：{accurate.Name} · {Size(accurate.SizeMb)}", detail, Ui2Row(get), Icons.Waveform, 64);
+                ((StackPanel)row.Children[^1]).Children.Add(progress);
+                rows.Add(row);
+            }
+        }
         var downloaded = SpeechModels.Models.Count(m => m.Role == "asr" && m.Local && m.Installed && m.RunsHere);
         rows.Add(Row("全部模型", $"已下载 {downloaded} 个", Mac.Push("管理模型…", ManageModels), Icons.Layers));
         Section(content, "本机", rows);
@@ -311,9 +338,12 @@ public sealed class SettingsWindow : MacWindow
 
     UIElement UvRow() => Row("缺少 uv", "运行转写脚本需要它；首次转写时会自动准备 Python 和依赖。", Mac.Primary("安装 uv", InstallUv, "从 astral.sh 下载官方安装脚本并安装到你的用户目录"), Icons.Chip);
 
+    const string AccurateModel = "fun-asr-nano-onnx";
+
     async Task Download(string id, Button button, TextBlock progress)
     {
-        var label = (TextBlock)button.Content;
+        var label = button.Content as TextBlock ?? new TextBlock();
+        var idle = label.Text;
         if (downloads.TryGetValue(id, out var running)) { running.Cancel(); return; }
         var cts = new CancellationTokenSource();
         downloads[id] = cts;
@@ -341,7 +371,7 @@ public sealed class SettingsWindow : MacWindow
         finally
         {
             downloads.Remove(id);
-            label.Text = "下载";
+            label.Text = idle;
         }
     }
 
