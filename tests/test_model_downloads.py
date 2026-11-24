@@ -110,10 +110,10 @@ class MirrorDownloadIsCompleteOrNotInstalled(unittest.TestCase):
 
     def test_an_older_download_without_a_manifest_still_counts_when_whole(self):
         self.dest.mkdir(parents=True)
-        (self.dest / "config.json").write_text("{}")
+        (self.dest / "config.json").write_text("{}", encoding="utf-8")
         (self.dest / "model-00001-of-00002.safetensors").write_bytes(b"a")
         (self.dest / "model.safetensors.index.json").write_text(json.dumps(
-            {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}))
+            {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}), encoding="utf-8")
         self.assertIsNone(T.model_path(asr_entry(self.name)))          # a shard is missing
         (self.dest / "model-00002-of-00002.safetensors").write_bytes(b"b")
         self.assertEqual(T.model_path(asr_entry(self.name)), self.dest)
@@ -139,13 +139,13 @@ class HuggingFaceSnapshotIsCompleteOrNotInstalled(unittest.TestCase):
 
     def put(self, *names):
         for n in names:
-            (self.snap / n).write_text("{}" if n.endswith(".json") else "x")
+            (self.snap / n).write_text("{}" if n.endswith(".json") else "x", encoding="utf-8")
 
     def test_a_snapshot_missing_a_shard_or_its_tokenizer_is_not_installed(self):
         m = asr_entry(self.name)
         self.put("config.json", "model-00001-of-00002.safetensors", "tokenizer_config.json")
         (self.snap / "model.safetensors.index.json").write_text(json.dumps(
-            {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}))
+            {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}), encoding="utf-8")
         self.assertIsNone(T.model_path(m))                       # a shard missing
         self.put("model-00002-of-00002.safetensors")
         self.assertIsNone(T.model_path(m))                       # the tokenizer its config asks for missing
@@ -248,7 +248,7 @@ class OneDownloadOfAModelAtATime(unittest.TestCase):
             runs.append(threading.get_ident())
             time.sleep(0.4)
             dest.mkdir(parents=True, exist_ok=True)
-            (dest / "config.json").write_text("{}")
+            (dest / "config.json").write_text("{}", encoding="utf-8")
             (dest / "model.safetensors").write_bytes(b"w")
             return dest
 
@@ -282,7 +282,7 @@ class SetupEndsWithItsApp(unittest.TestCase):
 
     def test_setup_takes_parent(self):
         for script in ("transcribe.py", "polish.py"):
-            p = subprocess.run([sys.executable, str(SCRIPTS / script), "setup", "--help"], capture_output=True, text=True,
+            p = subprocess.run([sys.executable, str(SCRIPTS / script), "setup", "--help"], capture_output=True, text=True, encoding="utf-8",
                                env={**os.environ, "POINT_TAKEN_NO_DOWNLOAD": "1"}, timeout=60)
             self.assertIn("--parent", p.stdout, script)
 

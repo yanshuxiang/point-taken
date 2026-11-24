@@ -66,13 +66,15 @@ class BoardPaging(unittest.TestCase):
     def test_boundaries_and_stitching(self):
         with tempfile.TemporaryDirectory(prefix='point-taken-paging-check-') as tmp:
             path = Path(tmp)
-            (path / 'main.swift').write_text(HARNESS)
+            (path / 'main.swift').write_text(HARNESS, encoding="utf-8")
             env = dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer')
+            # BoardMotionMask.swift: the page gate leaves the parts of the screen that move on their own out
             result = subprocess.run(['xcrun', 'swiftc', str(BASE / 'PointTakenCore/BoardPaging.swift'),
+                                     str(BASE / 'PointTakenCore/BoardMotionMask.swift'),
                                      str(BASE / 'PointTakenApp/Capture/BoardScrollStitcher.swift'),
                                      str(path / 'main.swift'), '-o', str(path / 'check')], env=env,
-                                    capture_output=True, text=True, timeout=90)
+                                    capture_output=True, text=True, encoding="utf-8", timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run([str(path / 'check')], capture_output=True, text=True, timeout=30)
+            result = subprocess.run([str(path / 'check')], capture_output=True, text=True, encoding="utf-8", timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('PASS:', result.stdout)

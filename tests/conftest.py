@@ -14,6 +14,16 @@ os.environ["POINT_TAKEN_WORKSPACE"] = os.path.join(_root, "ws")
 os.makedirs(os.environ["POINT_TAKEN_HOME"], exist_ok=True)
 os.makedirs(os.environ["POINT_TAKEN_WORKSPACE"], exist_ok=True)
 
+# The scripts' child processes in UTF-8 mode, as the Windows app runs them (ScriptRunner.cs: PYTHONUTF8=1): without it a
+# child on a Chinese Windows reads and writes files and pipes in the code page (GBK). Tests open files as UTF-8 themselves.
+os.environ.setdefault("PYTHONUTF8", "1")
+
+# Cloud keys from the developer's own shell (DASHSCOPE_API_KEY, OPENAI_API_KEY, the Volcengine pair …): with one set,
+# model choice offered and picked that cloud service (qwen3-asr-flash instead of macOS's recogniser) and a slip could
+# send a request on the developer's account. Tests that need a key set their own.
+for _name in [n for n in os.environ if n.upper().endswith("_API_KEY") or n.upper().startswith("VOLC_")]:
+    del os.environ[_name]
+
 
 def pytest_configure(config):
     # opt-in GUI tests (they open the app's windows on screen): POINT_TAKEN_GUI_TESTS=1, see tests/test_gui_layout.py

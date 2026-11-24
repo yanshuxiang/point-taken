@@ -1,0 +1,149 @@
+# Every pull request and every push to main: build and test both apps and the Python scripts, and package both apps
+# the way a release does (unsigned), so a broken release is caught before the tag. The packages are kept for 7 days
+# as workflow artifacts for trying a PR out. Releases: release.yml; the steps: docs/发布与命名规则.md.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  windows:
+    name: Windows · build, test, package
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: NuGet cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('app/windows/**/*.csproj', 'app/windows/Directory.Build.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Build
+        run: dotnet build app/windows/PointTaken.Windows.sln -c Release
+
+      - name: Test
+        run: >
+          dotnet test app/windows/PointTaken.Core.Tests -c Release --no-build
+          --logger "trx;LogFileName=core.trx" --logger "console;verbosity=normal"
+          --results-directory TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-test-results
+          path: TestResults
+          if-no-files-found: ignore
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: ./.github/scripts/install-inno-setup.ps1
+
+      - name: Package (unsigned)
+        shell: powershell
+        env:
+          POINT_TAKEN_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./app/windows/build.ps1 -SkipTests
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64-unsigned
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/*.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  macos:
+    name: macOS · build, test, package
+    # Xcode 27.2, the toolchain releases are built with (Xcode 26.6's Swift 6.3.3 crashes optimizing BoardReview.swift)
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the build number is the commit count
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Test
+        run: swift test --package-path app/macos
+
+      - name: Package (ad-hoc signed)
+        run: app/macos/build-dmg.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-arm64-unsigned
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  python:
+    name: Python · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # the scripts ship with both apps: every test runs on each, or skips where it does not apply (macOS's own
+        # recogniser, MLX, Swift …); Windows also checks the code page (a Chinese Windows reads files as GBK)
+        os: [ubuntu-24.04, macos-26, windows-2025]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            scripts/*.py
+            .github/workflows/ci.yml
+
+      - name: Test
+        # the union of the scripts' inline dependencies (PEP 723), on the Python they are pinned to;
+        # tests/ci-quarantine.txt lists known failures on the runners (each with its reason)
+        shell: bash   # Git Bash on Windows
+        run: |
+          # (macOS ships bash 3.2: keep this plain)
+          case "$RUNNER_OS" in macOS) os=macos;; Windows) os=windows;; *) os=linux;; esac
+          deselect=()
+          while read -r where id _; do
+            case "$where" in all|"$os") deselect+=(--deselect "$id");; esac
+          done < <(grep -Ev '^\s*(#|$)' tests/ci-quarantine.txt)
+          echo "quarantined on $os: $(( ${#deselect[@]} / 2 )) tests (tests/ci-quarantine.txt)"
+          uv run --no-project --python "$(grep -v '^#' scripts/.python-version | head -1)" \
+            --with pytest --with numpy==2.3.4 --with sherpa-onnx==1.13.8 --with truststore==0.10.5 \
+            --with opencc-python-reimplemented==0.1.7 \
+            pytest tests -ra --durations=15 -p no:cacheprovider "${deselect[@]}"

@@ -1,10 +1,13 @@
 """Menu must separate configured choice from actual completed requests."""
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'app/macos/Sources/PointTakenApp/Capture/BoardModelStatus.swift'
+SWIFTC = shutil.which('swiftc')
+@unittest.skipUnless(SWIFTC, 'needs the Swift compiler (swiftc)')
 class StatusTest(unittest.TestCase):
  def test_menu_distinguishes_success_skipped_and_pending(self):
   self.assertTrue(SOURCE.exists(), 'Menu has no model status or request evidence')
@@ -38,9 +41,9 @@ precondition(saved["requestID"] as? String == "fixture-request")
    enum CloudSpeechCheck { static func sentence(_ code: String?) -> String { code ?? "unknown" } }
    enum Loc { static func string(_ key: String, table: String) -> String { key } }
    """
-   (p/'main.swift').write_text(SOURCE.read_text().replace('import PointTakenCore', '')+boundary+checks)
-   r=subprocess.run(['swiftc',str(p/'main.swift'),'-o',str(p/'check')],capture_output=True,text=True)
+   (p/'main.swift').write_text(SOURCE.read_text(encoding="utf-8").replace('import PointTakenCore', '')+boundary+checks, encoding="utf-8")
+   r=subprocess.run([SWIFTC,str(p/'main.swift'),'-o',str(p/'check')],capture_output=True,text=True, encoding="utf-8")
    self.assertEqual(r.returncode,0,r.stderr)
-   r=subprocess.run([str(p/'check')],capture_output=True,text=True)
+   r=subprocess.run([str(p/'check')],capture_output=True,text=True, encoding="utf-8")
    self.assertEqual(r.returncode,0,r.stderr)
 if __name__=='__main__':unittest.main()

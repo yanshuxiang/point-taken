@@ -1,15 +1,18 @@
 """Exercise the production annotation routing with a fake script boundary; no credentials or network."""
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+SWIFTC = shutil.which('swiftc')
 
+@unittest.skipUnless(SWIFTC, 'needs the Swift compiler (swiftc)')
 class RoutingTest(unittest.TestCase):
     def test_actual_model_selection_routes_and_rejects_wrong_model(self):
-        source = (ROOT / 'app/macos/Sources/PointTakenApp/Capture/Board.swift').read_text()
-        production = (ROOT / 'app/macos/Sources/PointTakenApp/Capture/BoardModelStatus.swift').read_text().replace('import PointTakenCore', '') + source[source.index('enum BoardTranscription {'):source.index('final class BoardSpeech {')]
+        source = (ROOT / 'app/macos/Sources/PointTakenApp/Capture/Board.swift').read_text(encoding="utf-8")
+        production = (ROOT / 'app/macos/Sources/PointTakenApp/Capture/BoardModelStatus.swift').read_text(encoding="utf-8").replace('import PointTakenCore', '') + source[source.index('enum BoardTranscription {'):source.index('final class BoardSpeech {')]
         harness = r'''
 import Foundation
 var config: [String: Any] = [:]
@@ -76,10 +79,10 @@ print("routing passed")
 '''
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp)
-            (path / 'main.swift').write_text(harness + production + checks)
-            result = subprocess.run(['swiftc', str(path / 'main.swift'), '-o', str(path / 'check')], capture_output=True, text=True)
+            (path / 'main.swift').write_text(harness + production + checks, encoding="utf-8")
+            result = subprocess.run([SWIFTC, str(path / 'main.swift'), '-o', str(path / 'check')], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stderr)
-            result = subprocess.run([str(path / 'check')], capture_output=True, text=True)
+            result = subprocess.run([str(path / 'check')], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stderr)
 
 if __name__ == '__main__':

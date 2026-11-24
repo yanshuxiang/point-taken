@@ -130,7 +130,7 @@ class Glossary(unittest.TestCase):
         self.assertEqual(strings(RES / "en.lproj" / "Capture.strings")["capture.cards.seg_history"], "History %@")
         self.assertEqual(strings(RES / "zh-Hans.lproj" / "Capture.strings")["capture.cards.seg_current"], "当前 %@")
         self.assertEqual(strings(RES / "zh-Hans.lproj" / "Capture.strings")["capture.cards.seg_history"], "历史 %@")
-        src = "\n".join(p.read_text() for p in (RES.parent).rglob("*.swift"))
+        src = "\n".join(p.read_text(encoding="utf-8") for p in (RES.parent).rglob("*.swift"))
         for gone in ("TakenBanner", "mShowTaken", "main.sidebar.taken", "capture.taken.menu"):
             self.assertNotIn(gone, src, gone)
 

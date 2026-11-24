@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for the Developer ID (notarized) build, which runs with the hardened runtime (build-app.sh).
+     Under the hardened runtime the microphone needs audio-input; screen recording and accessibility are TCC
+     permissions and need no entitlement. The app is not sandboxed. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

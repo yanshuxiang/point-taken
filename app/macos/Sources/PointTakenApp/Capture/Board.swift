@@ -2472,7 +2472,14 @@ final class BoardSpeech {
     var onStatus: ((Status) -> Void)?
     var onLevel: ((Float) -> Void)?
 
-    private let engine = AVAudioEngine()
+    // Rebuilt for every recording and after every input change (see resetEngine): a reused engine keeps the
+    // format of the microphone it first opened, so installTap/start() fail once AirPods or another mic take over.
+    private var engine = AVAudioEngine()
+    private var engineObserver: NSObjectProtocol?
+    private var pendingInputChange: DispatchWorkItem?
+    private var tapBuffers = 0 // guarded by lock; buffers the microphone delivered since the input was (re)connected
+    private var micFailed = false // the microphone never started: there is no audio to transcribe
+    private var micLost = false // the input changed mid-recording and could not be reopened yet
     private var recognizer: SFSpeechRecognizer?
     private var selectedLive: BoardLiveSpeech?
     private var liveID = UUID()
@@ -2623,6 +2630,8 @@ final class BoardSpeech {
         finalTranscriptVerified = false
         archiveWarning = nil
         errorCount = 0
+        micFailed = false
+        micLost = false
         recognizer = nil
         persist()
         persistState("recording")
@@ -2651,16 +2660,117 @@ final class BoardSpeech {
         }
     }
 
-    private func beginAudio() -> Bool {
-        guard let directory else { return false }
+    private static let noMicrophone = "没找到可用的麦克风，请在「系统设置 › 声音 › 输入」里选一个"
+
+    /// Drop the current engine and make a new one that reads whatever microphone the system uses now.
+    private func resetEngine() {
+        pendingInputChange?.cancel(); pendingInputChange = nil
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+        engineObserver = nil
+        engine.stop()
+        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        engine.reset()
+        let fresh = AVAudioEngine()
+        engine = fresh
+        // The engine stops itself when the input device or its format changes (AirPods connecting, a mic
+        // plugged in, the default input switched in System Settings). Reconnect rather than record silence.
+        engineObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: fresh, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.engine === fresh else { return }
+            // Device switches post a burst of changes; reconnect once they settle.
+            self.pendingInputChange?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.inputChanged() }
+            self.pendingInputChange = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300), execute: work)
+        }
+    }
+
+    /// The microphone's current format, or nil when the system has no usable input.
+    private func currentInputFormat() -> AVAudioFormat? {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            set(.off("没找到可用的麦克风", nil)); return false
+        guard format.sampleRate > 0, format.channelCount > 0, input.inputFormat(forBus: 0).sampleRate > 0 else { return nil }
+        return format
+    }
+
+    /// Tap the current microphone into the recording's pipeline and start the engine (unless paused).
+    /// Returns the failure to show, or nil. Buffers keep the device's own format; the pipeline converts them.
+    private func connectInput(_ pipeline: BoardAudioPipeline) -> String? {
+        guard let format = currentInputFormat() else { return Self.noMicrophone }
+        lock.lock(); tapBuffers = 0; lock.unlock()
+        var exception: NSError?
+        let input = engine.inputNode
+        let installed = PointTakenTry({
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, pipeline] buffer, _ in
+                guard let self else { return }
+                self.lock.lock()
+                let suspended = self.paused
+                if !suspended { self.tapBuffers += 1 }
+                self.lock.unlock()
+                guard !suspended else { return }
+                pipeline.append(buffer)
+            }
+        }, &exception)
+        guard installed else { return "麦克风启动失败：\(exception?.localizedDescription ?? "设备格式变化")" }
+        tapInstalled = true
+        engine.prepare()
+        guard !paused else { return nil } // setPaused(false) starts it
+        do { try engine.start() }
+        catch {
+            input.removeTap(onBus: 0); tapInstalled = false
+            return "麦克风打不开：\(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    /// Connect with a fresh engine; a device that is still switching often refuses the first attempt.
+    private func reconnectInput(_ pipeline: BoardAudioPipeline) -> String? {
+        resetEngine()
+        guard let failure = connectInput(pipeline) else { return nil }
+        resetEngine()
+        return connectInput(pipeline) == nil ? nil : failure
+    }
+
+    /// The input changed mid-recording and the engine stopped: reopen the microphone the system uses now.
+    private func inputChanged() {
+        guard running, stopping.isEmpty, let pipeline = audioPipeline else { return }
+        if let failure = reconnectInput(pipeline) {
+            micLost = true
+            set(.off("麦克风切换后没能接上（\(failure)）。已录内容会保留，可暂停后点继续重试", nil))
+            return
+        }
+        if micLost, !paused { micLost = false; set(.listening) }
+        watchInput(sessionID)
+    }
+
+    /// An engine can start yet deliver nothing (a device that vanished while opening). Retry once, then say so.
+    private func watchInput(_ id: UUID, retried: Bool = false) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, id == self.sessionID, self.running, self.stopping.isEmpty, !self.paused, self.tapInstalled
+            else { return }
+            self.lock.lock(); let received = self.tapBuffers; self.lock.unlock()
+            guard received == 0 else { return }
+            if !retried, let pipeline = self.audioPipeline {
+                if let failure = self.reconnectInput(pipeline) { self.micLost = true; self.set(.off(failure, nil)); return }
+                self.watchInput(id, retried: true)
+            } else {
+                self.micLost = true
+                self.set(.off("麦克风没有传来声音：请检查「系统设置 › 声音 › 输入」，或结束后重新开始", nil))
+            }
+        }
+    }
+
+    private func beginAudio() -> Bool {
+        guard let directory else { return false }
+        resetEngine()
+        guard let format = currentInputFormat() else {
+            micFailed = true
+            set(.off(Self.noMicrophone, nil)); return false
         }
         let writer: BoardAudioArchive
         do { writer = try BoardAudioArchive(url: directory.appendingPathComponent("原始录音.wav"), format: format) }
-        catch { set(.off("原始录音无法保存：\(error.localizedDescription)", nil)); return false }
+        catch { micFailed = true; set(.off("原始录音无法保存：\(error.localizedDescription)", nil)); return false }
         audio = writer
         var live: BoardLiveSpeech?
         if finalModel != BoardTranscription.apple {
@@ -2691,24 +2801,38 @@ final class BoardSpeech {
                 set(.off("所选模型实时字幕无法启动，不影响录音。", nil))
             }
         }
-        var writeWarningSent = false // accessed only on the serial audio worker
-        let pipeline = BoardAudioPipeline(consume: { [weak self, live] buffer in
+        // Accessed only on the serial audio worker.
+        var writeWarningSent = false
+        var bridge: BoardAudioFormatBridge?
+        let pipeline = BoardAudioPipeline(consume: { [weak self, live] incoming in
             guard let self else { return }
             // A failed write must not permanently disable every later buffer. Retrying the following buffers
             // preserves as much raw audio as possible, and the final pass must never certify a partial archive.
-            do { try writer.append(buffer) }
-            catch {
-                if !writeWarningSent {
-                    writeWarningSent = true
-                    DispatchQueue.main.async {
-                        guard !self.audioArchiveIncomplete else { return }
-                        self.audioArchiveIncomplete = true
-                        self.finalTranscriptVerified = false
-                        self.archiveWarning = "原始录音部分写入失败，录音可能不完整：\(error.localizedDescription)"
-                        self.set(.off("录音保存异常；实时文字仍保留，请检查存储空间", nil))
-                    }
+            func warn(_ error: Error) {
+                guard !writeWarningSent else { return }
+                writeWarningSent = true
+                DispatchQueue.main.async {
+                    guard !self.audioArchiveIncomplete else { return }
+                    self.audioArchiveIncomplete = true
+                    self.finalTranscriptVerified = false
+                    self.archiveWarning = "原始录音部分写入失败，录音可能不完整：\(error.localizedDescription)"
+                    self.set(.off("录音保存异常；实时文字仍保留，请检查存储空间", nil))
                 }
             }
+            // After a mid-recording device switch, bring buffers back to the format the files were opened with.
+            var buffer = incoming
+            if !BoardAudioFormatBridge.matches(incoming.format, format) {
+                if bridge.map({ !BoardAudioFormatBridge.matches($0.source, incoming.format) }) ?? true {
+                    bridge = BoardAudioFormatBridge(from: incoming.format, to: format)
+                }
+                do {
+                    guard let bridge else { throw NSError(domain: "PointTaken.AudioBridge", code: 0) }
+                    buffer = try bridge.convert(incoming)
+                } catch { warn(error); return }
+                guard buffer.frameLength > 0 else { return }
+            }
+            do { try writer.append(buffer) }
+            catch { warn(error) }
             live?.append(buffer)
             self.lock.lock(); self.request?.append(buffer); self.lock.unlock()
             self.levelTick += 1
@@ -2730,34 +2854,20 @@ final class BoardSpeech {
             }
         })
         audioPipeline = pipeline
-        var exception: NSError?
-        let installed = PointTakenTry({
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, pipeline] buffer, _ in
-                guard let self else { return }
-                self.lock.lock(); let suspended = self.paused; self.lock.unlock()
-                guard !suspended else { return }
-                pipeline.append(buffer)
-            }
-        }, &exception)
-        guard installed else {
+        // The engine was rebuilt above; a refused first attempt gets one more fresh engine before it is reported.
+        var failure = connectInput(pipeline)
+        if failure != nil, reconnectInput(pipeline) == nil { failure = nil }
+        if let failure {
+            resetEngine()
             pipeline.finish { writer.close() }; audioPipeline = nil; audio = nil
             live?.cancel(); selectedLive = nil
-            set(.off("麦克风启动失败：\(exception?.localizedDescription ?? "设备格式变化")", nil))
-            return false
-        }
-        tapInstalled = true
-        engine.prepare()
-        do { try engine.start() }
-        catch {
-            input.removeTap(onBus: 0); tapInstalled = false
-            pipeline.finish { writer.close() }; audioPipeline = nil; audio = nil
-            live?.cancel(); selectedLive = nil
-            set(.off("麦克风打不开：\(error.localizedDescription)", nil)); return false
+            micFailed = true
+            set(.off(failure, nil)); return false
         }
         running = true
-        if paused { engine.pause() }
         if finalModel == BoardTranscription.apple { set(.starting) }
         else if let live { set(.starting); live.start() }
+        watchInput(sessionID)
         return true
     }
 
@@ -2827,7 +2937,18 @@ final class BoardSpeech {
                 let live = selectedLive
                 if let audioPipeline { audioPipeline.afterPending { live?.setPaused(false) } }
                 else { live?.setPaused(false) }
-                try engine.start()
+                // The microphone may have changed while paused (or was lost earlier): reopen what is current.
+                var failure: String?
+                if tapInstalled {
+                    do { try engine.start() }
+                    catch {
+                        if let audioPipeline { failure = reconnectInput(audioPipeline) }
+                        else { throw error }
+                    }
+                } else if let audioPipeline { failure = reconnectInput(audioPipeline) }
+                if let failure { set(.off("恢复麦克风失败：\(failure)", nil)); return }
+                micLost = false
+                watchInput(sessionID)
                 if finalModel != BoardTranscription.apple {
                     if selectedLive?.healthy == true { set(.listening) }
                     else { set(.off("所选模型实时字幕不可用，不影响录音。", nil)) }
@@ -2877,8 +2998,8 @@ final class BoardSpeech {
         guard stopping.count == 1 else { return }
         running = false
         sessionID = UUID() // A pending permission response must not restart a stopped session.
-        if engine.isRunning { engine.stop() }
-        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        // Unconditional: a paused engine reports isRunning == false but still holds the device and its old format.
+        resetEngine()
         if let pipeline = audioPipeline, let writer = audio {
             audioDraining = true
             pipeline.finish { [weak self] in
@@ -2934,6 +3055,11 @@ final class BoardSpeech {
         do { try fullText.write(to: directory.appendingPathComponent("实时转写.txt"), atomically: true, encoding: .utf8) }
         catch { archiveWarning = "实时转写备份失败：\(error.localizedDescription)" }
         if skipFileFinalization { finishFinalization(); return }
+        // The WAV holds only its header: sending it would come back as a misleading service error.
+        if micFailed {
+            archiveWarning = "麦克风没有启动，这次没有录到声音。"
+            finalTranscriptVerified = false; finishFinalization(); return
+        }
         // File recognition cannot recover samples that could not be archived. Keep the longer live text intact.
         if audioArchiveIncomplete { finalTranscriptVerified = false; finishFinalization(); return }
         if let live = finishedLive, live.fileFinalizationAttempted {
