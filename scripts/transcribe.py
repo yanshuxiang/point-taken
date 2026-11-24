@@ -1190,6 +1190,61 @@ def vad_segments(samples: np.ndarray, max_speech: float = 25) -> list[tuple[floa
     return [pad_segment(s, e, dur) for s, e in segs]
 
 
+def quiet_cut(samples: np.ndarray, lo: float, hi: float, frame: float = .03) -> float:
+    """The middle of the quietest 30 ms between lo and hi seconds: where a run of speech with no pause in it is cut.
+    A cut at a fixed length lands inside a word as often as not, and the word comes back from both sides of it — the
+    duplicated syllable and stray sentence mark of 横坐标和。和一个纵坐标."""
+    n = int(frame * SR)
+    a, b = max(0, int(lo * SR)), min(len(samples), int(hi * SR))
+    k = (b - a) // n
+    if k < 2:
+        return hi
+    e = (samples[a:a + k * n].reshape(k, n).astype(np.float32) ** 2).mean(1)
+    if float(e.max() - e.min()) <= 1e-12:
+        return hi                      # nothing quieter anywhere: at the limit, as long a piece as allowed
+    return (a + (int(np.argmin(e)) + .5) * n) / SR
+
+
+def mid_speech(samples: np.ndarray, t: float) -> bool:
+    """Whether t seconds is inside speech rather than a pause: the 0.2 s around it is louder than a quarter of the
+    speech of the few seconds around it."""
+    n = int(.03 * SR)
+    a, b = max(0, int((t - 3) * SR)), min(len(samples), int((t + 3) * SR))
+    k = (b - a) // n
+    if k < 4:
+        return False
+    levels = np.sqrt((samples[a:a + k * n].reshape(k, n).astype(np.float32) ** 2).mean(1))
+    here = samples[max(0, int((t - .1) * SR)):int((t + .1) * SR)].astype(np.float32)
+    return bool(len(here)) and float(np.sqrt((here ** 2).mean())) > .25 * float(np.percentile(levels, 75))
+
+
+def mend_cut(result: tuple, following: str) -> tuple:
+    """The piece before a cut inside speech: the full stop a model writes at the end of every piece it hears is not
+    where the sentence ends when Chinese or Japanese goes on after it (时刻T。决定一个X)."""
+    text = result[2]
+    if text.endswith(("。", ".")) and following and re.match(f"[{_CJK}]", following[0]) and re.match(f"[{_CJK}\\w]", text[-2:-1] or " "):
+        return (result[0], result[1], text[:-1], *result[3:])
+    return result
+
+
+def speech_chunks(samples: np.ndarray, max_len: float, max_gap: float = 1.0) -> list[tuple[float, float]]:
+    """The VAD's speech in windows of at most `max_len` s for a model that hears short pieces (SenseVoice): a stretch of
+    speech longer than that is cut at its quietest moment, not wherever the VAD's own limit falls, and no audio is in
+    two windows (padded neighbours that overlap meet in the middle) — a word heard twice was written twice."""
+    pieces = []
+    for s, e in vad_segments(samples, max_speech=25):
+        while e - s > max_len:
+            c = quiet_cut(samples, s + max_len * .5, s + max_len)
+            pieces.append((s, c))
+            s = c
+        pieces.append((s, e))
+    chunks = [list(c) for c in group_chunks(pieces, max_len, max_gap)]
+    for a, b in zip(chunks, chunks[1:]):
+        if b[0] < a[1]:
+            a[1] = b[0] = (a[1] + b[0]) / 2
+    return [(s, e) for s, e in chunks if e > s]
+
+
 def group_chunks(segs: list[tuple[float, float]], max_len: float, max_gap: float = 1.0) -> list[tuple[float, float]]:
     """Merge neighbouring speech segments into contiguous windows (original timeline, no remapping needed)."""
     chunks: list[list[float]] = []
@@ -1201,6 +1256,10 @@ def group_chunks(segs: list[tuple[float, float]], max_len: float, max_gap: float
     return [(s, e) for s, e in chunks]
 
 
+# a pause this long between the VAD's (padded) segments — about 1.55 s of quiet — always ends a piece
+LONG_PAUSE = 1.2
+
+
 def pause_spans(samples: np.ndarray, max_len: float) -> list[tuple[float, float]]:
     """The audio cut into contiguous spans of at most `max_len` s, each cut in the middle of a pause the VAD heard (a
     hard cut only inside speech longer than that); spans with no speech in them are left out. Nothing at a span's edges
@@ -1210,14 +1269,19 @@ def pause_spans(samples: np.ndarray, max_len: float) -> list[tuple[float, float]
     segs = vad_segments(samples, max_speech=min(25, max_len))
     if not segs:
         return []
-    cuts = [(a[1] + b[0]) / 2 for a, b in zip(segs, segs[1:]) if b[0] > a[1]]
+    pauses = [(a, b) for a, b in zip(segs, segs[1:]) if b[0] > a[1]]
+    cuts = [(a[1] + b[0]) / 2 for a, b in pauses]
+    # a long pause always ends a span: what is said after it is another utterance (the app's takes, recorded apart with
+    # the microphone turned off between them, are joined by 2 s of silence and must come back apart)
+    ends = {i for i, (a, b) in enumerate(pauses) if b[0] - a[1] >= LONG_PAUSE}
     spans, start = [], 0.0
     for i, c in enumerate(cuts + [dur]):
         nxt = cuts[i + 1] if i + 1 < len(cuts) else dur
-        while c - start > max_len:            # one stretch of speech longer than a span
-            spans.append((start, start + max_len))
-            start += max_len
-        if nxt - start > max_len and c > start:
+        while c - start > max_len:            # one stretch of speech longer than a span: cut where it is quietest
+            q = quiet_cut(samples, start + max_len * .5, start + max_len)
+            spans.append((start, q))
+            start = q
+        if (nxt - start > max_len or i in ends) and c > start:
             spans.append((start, c))
             start = c
     if dur > start:
@@ -2938,8 +3002,7 @@ def transcribe_track(samples: np.ndarray, backend, name: str, workers: int, labe
         else:
             chunks = pause_spans(samples, backend.max_chunk)
     else:
-        segs = vad_segments(samples, max_speech=min(25, backend.max_chunk))
-        chunks = group_chunks(segs, backend.max_chunk)
+        chunks = speech_chunks(samples, backend.max_chunk)
     sp = sum(e - s for s, e in chunks)
     if not quiet:
         print(f"audio {fmt_ts(len(samples) / SR)}{f' ({label})' if label else ''}, speech {fmt_ts(sp)} "
@@ -2947,8 +3010,14 @@ def transcribe_track(samples: np.ndarray, backend, name: str, workers: int, labe
     results, blank = [], 0.0
     with ThreadPoolExecutor(workers) as pool:
         decoded = pool.map(lambda ch: decode_chunk(backend, samples, *ch), chunks)
+        last_end = None
         for i, ((s, e), r) in enumerate(zip(chunks, decoded)):
+            r = list(r)
+            # a cut inside speech (no pause there): the piece before it ends mid-sentence, whatever mark it was given
+            if r and last_end == s and mid_speech(samples, s):
+                results[-1] = mend_cut(results[-1], r[0][2])
             results.extend((s_, e_, t, label, *lg) for s_, e_, t, *lg in r)
+            last_end = e if r else None
             if is_blank(r):
                 blank += e - s
             if (i + 1) % 20 == 0 and not quiet:
@@ -3201,8 +3270,21 @@ def note_text(results: list) -> tuple[str, str | None]:
     results = sorted(results, key=lambda r: r[0])
     texts = [r[2] for r in results if r[2]]
     langs = [r[4] for r in results if len(r) > 4 and r[4]]
-    sep = "" if langs and all(x in ("zh", "ja", "yue") for x in langs) else " "
-    return sep.join(texts).strip(), (max(set(langs), key=langs.count) if langs else None)
+    if langs and all(x in ("zh", "ja", "yue") for x in langs):
+        text = "".join(texts)
+    else:
+        # a model that tags no language (Fun-ASR-Nano): a space between pieces only where neither side is Chinese or
+        # Japanese — 得到T等于Y减一, not 得到 T等于Y减一
+        text = ""
+        for t in texts:
+            if text and not (re.match(_CJK_EDGE, text[-1]) or re.match(_CJK_EDGE, t[0])):
+                text += " "
+            text += t
+    return text.strip(), (max(set(langs), key=langs.count) if langs else None)
+
+
+# Chinese and Japanese characters and their full-width punctuation — not Hangul: Korean puts spaces between words
+_CJK_EDGE = "[぀-ヿ㐀-鿿　-〿＀-￯]"
 
 
 # --- voiceprint: only my voice (issue #26; docs/design/voiceprint.md) -----------------------------------------
